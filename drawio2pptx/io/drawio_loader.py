@@ -1,0 +1,1363 @@
+"""
+draw.io file loading and parsing module
+
+Provides loading of .drawio/.xml/.mxfile files, page selection, layer extraction,
+parsing of mxGraphModel → mxCell (vertex/edge), and style string parsing
+"""
+import re
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+from lxml import etree as ET
+from lxml import html as lxml_html
+from pptx.dml.color import RGBColor  # type: ignore[import]
+
+from ..model.intermediate import (
+    ShapeElement, ConnectorElement, BaseElement,
+    Transform, Style, TextParagraph, TextRun
+)
+from ..logger import ConversionLogger
+from ..fonts import DRAWIO_DEFAULT_FONT_FAMILY
+from ..config import PARALLELOGRAM_SKEW
+
+
+class ColorParser:
+    """Convert draw.io color strings to RGBColor"""
+    
+    @staticmethod
+    def parse(color_str: Optional[str]) -> Optional[RGBColor]:
+        """
+        Convert draw.io color string to RGBColor
+        
+        Args:
+            color_str: Color string (#RRGGBB, #RGB, rgb(r,g,b), light-dark(...), etc.)
+        
+        Returns:
+            RGBColor object, or None
+        """
+        if not color_str:
+            return None
+        
+        color_str = color_str.strip()
+        
+        # Process light-dark(color1,color2) format (use light mode color)
+        light_dark_match = re.match(r'^light-dark\s*\((.*)\)$', color_str)
+        if light_dark_match:
+            inner = light_dark_match.group(1)
+            # Split by comma (ignore commas inside parentheses)
+            parts = []
+            depth = 0
+            start = 0
+            for i, char in enumerate(inner):
+                if char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+                elif char == ',' and depth == 0:
+                    parts.append(inner[start:i].strip())
+                    start = i + 1
+            parts.append(inner[start:].strip())
+            
+            if len(parts) >= 1:
+                # Use light mode color (first argument)
+                light_color = parts[0]
+                return ColorParser.parse(light_color)
+        
+        # Return None if "none"
+        if color_str.lower() == "none":
+            return None
+        
+        # Hexadecimal format (#RRGGBB or #RGB)
+        hex_match = re.match(r'^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$', color_str)
+        if hex_match:
+            hex_val = hex_match.group(1)
+            if len(hex_val) == 3:
+                # Expand short form (#RGB)
+                r = int(hex_val[0] * 2, 16)
+                g = int(hex_val[1] * 2, 16)
+                b = int(hex_val[2] * 2, 16)
+            else:
+                r = int(hex_val[0:2], 16)
+                g = int(hex_val[2:4], 16)
+                b = int(hex_val[4:6], 16)
+            return RGBColor(r, g, b)
+        
+        # rgb(r, g, b) format
+        rgb_match = re.match(r'^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$', color_str)
+        if rgb_match:
+            r = int(rgb_match.group(1))
+            g = int(rgb_match.group(2))
+            b = int(rgb_match.group(3))
+            return RGBColor(r, g, b)
+        
+        return None
+
+
+class StyleExtractor:
+    """Extract style properties from mxCell elements"""
+    
+    # Mapping dictionary: draw.io shape type -> normalized shape type
+    _SHAPE_TYPE_MAP: dict[str, str] = {
+        # Basic shapes
+        'rect': 'rectangle',
+        'rectangle': 'rectangle',
+        'square': 'rectangle',
+        'ellipse': 'ellipse',
+        'circle': 'ellipse',
+        # mxgraph.basic shapes
+        'mxgraph.basic.pentagon': 'pentagon',
+        'mxgraph.basic.octagon2': 'octagon',
+        'mxgraph.basic.acute_triangle': 'isosceles_triangle',
+        'mxgraph.basic.orthogonal_triangle': 'right_triangle',
+        'mxgraph.basic.4_point_star_2': '4_point_star',
+        'mxgraph.basic.star': '5_point_star',
+        'mxgraph.basic.6_point_star': '6_point_star',
+        'mxgraph.basic.8_point_star': '8_point_star',
+        'mxgraph.basic.smiley': 'smiley',
+    }
+    
+    # Font style bit flags: bit position -> attribute name
+    _FONT_STYLE_BITS: dict[int, str] = {
+        0: 'bold',
+        1: 'italic',
+        2: 'underline',
+    }
+    
+    def __init__(self, color_parser: Optional[ColorParser] = None):
+        """
+        Args:
+            color_parser: ColorParser instance (creates new one if None)
+        """
+        self.color_parser = color_parser or ColorParser()
+    
+    def extract_style_value(self, style_str: str, key: str) -> Optional[str]:
+        """Extract value for specified key from style string"""
+        if not style_str:
+            return None
+        for part in style_str.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k.strip() == key:
+                    return v.strip()
+        return None
+    
+    def extract_style_float(self, style_str: str, key: str, default: Optional[float] = None) -> Optional[float]:
+        """Extract float value from style string"""
+        value_str = self.extract_style_value(style_str, key)
+        if value_str:
+            try:
+                return float(value_str)
+            except ValueError:
+                pass
+        return default
+    
+    def _parse_font_style(self, font_style_str: Optional[str]) -> dict[str, bool]:
+        """
+        Parse font style bit flags
+        
+        Args:
+            font_style_str: Font style string (integer as string)
+        
+        Returns:
+            Dictionary with 'bold', 'italic', 'underline' keys
+        """
+        result = {'bold': False, 'italic': False, 'underline': False}
+        if font_style_str:
+            try:
+                font_style_int = int(font_style_str) if font_style_str.isdigit() else 0
+                for bit_pos, attr_name in self._FONT_STYLE_BITS.items():
+                    if (font_style_int & (1 << bit_pos)) != 0:
+                        result[attr_name] = True
+            except (ValueError, TypeError):
+                pass
+        return result
+    
+    def extract_fill_color(self, cell: ET.Element) -> Optional[Any]:
+        """
+        Extract fillColor
+        
+        Returns:
+            RGBColor object (when color is specified), "default" (when default/auto), None (when transparent)
+        """
+        # Get from direct attribute
+        fill_color = cell.attrib.get("fillColor")
+        if fill_color:
+            fill_color_lower = fill_color.lower().strip()
+            if fill_color_lower in ["default", "auto"]:
+                return "default"
+            elif fill_color_lower == "none":
+                return None
+            else:
+                parsed = self.color_parser.parse(fill_color)
+                if parsed:
+                    return parsed
+        
+        # Get from style attribute
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "fillColor":
+                        value_lower = value.strip().lower()
+                        if value_lower in ["default", "auto"]:
+                            return "default"
+                        elif value_lower == "none":
+                            return None
+                        else:
+                            parsed = self.color_parser.parse(value.strip())
+                            if parsed:
+                                return parsed
+        # If fillColor is omitted, draw.io uses a default fill for most vertex shapes.
+        # Treat missing fillColor as "default" for vertices, but keep edges transparent.
+        try:
+            if cell.attrib.get("vertex") == "1" and cell.attrib.get("edge") != "1":
+                return "default"
+        except Exception:
+            pass
+
+        return None
+
+    def extract_gradient_color(self, cell: ET.Element) -> Optional[Any]:
+        """
+        Extract gradientColor
+
+        Returns:
+            RGBColor object (when color is specified), "default" (when default/auto), None (when no gradient/none)
+        """
+        # Direct attribute (rare, but keep consistent with fillColor)
+        grad_color = cell.attrib.get("gradientColor")
+        if grad_color:
+            grad_color_lower = grad_color.lower().strip()
+            if grad_color_lower in ["default", "auto"]:
+                return "default"
+            if grad_color_lower == "none":
+                return None
+            parsed = self.color_parser.parse(grad_color)
+            if parsed:
+                return parsed
+
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "gradientColor":
+                        value_lower = value.strip().lower()
+                        if value_lower in ["default", "auto"]:
+                            return "default"
+                        if value_lower == "none":
+                            return None
+                        parsed = self.color_parser.parse(value.strip())
+                        if parsed:
+                            return parsed
+                        return None
+
+        return None
+
+    def extract_gradient_direction(self, cell: ET.Element) -> Optional[str]:
+        """Extract gradientDirection (e.g., north/south/east/west)"""
+        style = cell.attrib.get("style", "")
+        if not style:
+            return None
+        value = self.extract_style_value(style, "gradientDirection")
+        return value.strip() if value else None
+    
+    def extract_stroke_color(self, cell: ET.Element) -> Optional[RGBColor]:
+        """Extract strokeColor"""
+        stroke_color = cell.attrib.get("strokeColor")
+        if stroke_color:
+            parsed = self.color_parser.parse(stroke_color)
+            if parsed:
+                return parsed
+        
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "strokeColor":
+                        parsed = self.color_parser.parse(value.strip())
+                        if parsed:
+                            return parsed
+        
+        return None
+    
+    def extract_font_color(self, cell: ET.Element) -> Optional[RGBColor]:
+        """Extract fontColor (also checks inside HTML tags)"""
+        font_color = cell.attrib.get("fontColor")
+        if font_color:
+            parsed = self.color_parser.parse(font_color)
+            if parsed:
+                return parsed
+        
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "fontColor":
+                        parsed = self.color_parser.parse(value.strip())
+                        if parsed:
+                            return parsed
+        
+        # Get from style attribute in HTML tags (for Square/Circle support)
+        value = cell.attrib.get("value", "")
+        if value and "<font" in value:
+            try:
+                wrapped = f"<div>{value}</div>"
+                parsed = lxml_html.fromstring(wrapped)
+                font_tags = parsed.findall(".//font")
+                for font_tag in font_tags:
+                    font_style = font_tag.get("style", "")
+                    if font_style and "color:" in font_style:
+                        color_match = re.search(r'color:\s*([^;]+)', font_style)
+                        if color_match:
+                            color_value = color_match.group(1).strip()
+                            parsed_color = self.color_parser.parse(color_value)
+                            if parsed_color:
+                                return parsed_color
+            except Exception:
+                pass
+        
+        return None
+
+    def extract_label_background_color(self, cell: ET.Element) -> Optional[RGBColor]:
+        """Extract labelBackgroundColor (draw.io label background color; equivalent to highlight)"""
+        label_bg = cell.attrib.get("labelBackgroundColor")
+        if label_bg:
+            parsed = self.color_parser.parse(label_bg)
+            if parsed:
+                return parsed
+
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "labelBackgroundColor":
+                        parsed = self.color_parser.parse(value.strip())
+                        if parsed:
+                            return parsed
+                        return None
+        return None
+    
+    def extract_shadow(self, cell: ET.Element, mgm_root: Optional[ET.Element]) -> bool:
+        """Extract shadow setting"""
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "shadow":
+                        return value.strip() == "1"
+        
+        if mgm_root is not None:
+            mgm_shadow = mgm_root.attrib.get("shadow")
+            if mgm_shadow == "1":
+                return True
+        
+        return False
+    
+    def extract_shape_type(self, cell: ET.Element) -> str:
+        """Extract and normalize shape type"""
+        style = cell.attrib.get("style", "")
+
+        # Prefer explicit "shape=..." when present.
+        # draw.io sometimes emits e.g. "ellipse;shape=cloud;..." where the first token is generic.
+        shape_type = self.extract_style_value(style, "shape")
+        if shape_type:
+            shape_type = shape_type.lower()
+            # draw.io flowchart: "Predefined process" is often represented as shape=process with backgroundOutline=1.
+            # Map it to a dedicated pseudo-type so we can use PowerPoint's predefined-process shape.
+            if shape_type == "process":
+                try:
+                    bg_outline = self.extract_style_value(style, "backgroundOutline")
+                    if (bg_outline or "").strip() == "1":
+                        return "predefinedprocess"
+                except Exception:
+                    pass
+            # Use dictionary mapping
+            normalized = self._SHAPE_TYPE_MAP.get(shape_type)
+            if normalized:
+                return normalized
+            # Keep rhombus/parallelogram/cloud/trapezoid/etc. as-is.
+            return shape_type
+
+        if style:
+            parts = style.split(";")
+            first_part = (parts[0].strip().lower() if parts else "")
+            # Use dictionary mapping
+            normalized = self._SHAPE_TYPE_MAP.get(first_part)
+            if normalized:
+                return normalized
+            # Keep rhombus as-is
+            if first_part == "rhombus":
+                return "rhombus"
+
+        return "rectangle"
+
+
+class DrawIOLoader:
+    """draw.io file loading and parsing"""
+    
+    def __init__(self, logger: Optional[ConversionLogger] = None):
+        """
+        Args:
+            logger: ConversionLogger instance
+        """
+        self.logger = logger
+        self.color_parser = ColorParser()
+        self.style_extractor = StyleExtractor(self.color_parser)
+    
+    def load_file(self, path: Path) -> List[ET.Element]:
+        """
+        Load draw.io file and return list of diagrams
+        
+        Args:
+            path: File path
+        
+        Returns:
+            List of mxGraphModel elements (corresponding to each diagram)
+        """
+        tree = ET.parse(path)
+        root = tree.getroot()
+        
+        diagrams = []
+        # Process <diagram> elements
+        for d in root.findall(".//diagram"):
+            inner = (d.text or "").strip()
+            if not inner:
+                mgm = d.find(".//mxGraphModel")
+                if mgm is not None:
+                    diagrams.append(mgm)
+                    continue
+                continue
+            
+            # Unescape HTML entities
+            if "&lt;" in inner or "&amp;" in inner:
+                try:
+                    wrapped = f"<div>{inner}</div>"
+                    parsed = lxml_html.fromstring(wrapped)
+                    inner = parsed.text_content()
+                except Exception:
+                    pass
+            
+            # Parse as XML fragment
+            if "<mxGraphModel" in inner or "<root" in inner or "<mxCell" in inner:
+                try:
+                    parsed = ET.fromstring(inner)
+                    mgm = None
+                    if parsed.tag.endswith("mxGraphModel") or parsed.tag == "mxGraphModel":
+                        mgm = parsed
+                    else:
+                        mgm = parsed.find(".//mxGraphModel")
+                        if mgm is None and parsed.tag.endswith("root"):
+                            mgm = parsed
+                    if mgm is not None:
+                        diagrams.append(mgm)
+                        continue
+                    diagrams.append(parsed)
+                    continue
+                except ET.ParseError:
+                    pass
+            
+            # Fallback
+            mgm_global = root.find(".//mxGraphModel")
+            if mgm_global is not None:
+                diagrams.append(mgm_global)
+            else:
+                diagrams.append(root)
+        
+        # If <diagram> tag is not present
+        if not diagrams:
+            mgm_global = root.find(".//mxGraphModel")
+            if mgm_global is not None:
+                diagrams.append(mgm_global)
+            else:
+                diagrams.append(root)
+        
+        return diagrams
+    
+    def extract_page_size(self, mgm_root: ET.Element) -> tuple:
+        """
+        Extract page size
+        
+        Returns:
+            (width, height) tuple (px), or (None, None)
+        """
+        page_width = mgm_root.attrib.get("pageWidth")
+        page_height = mgm_root.attrib.get("pageHeight")
+        
+        if page_width and page_height:
+            try:
+                width = float(page_width)
+                height = float(page_height)
+                return (width, height)
+            except ValueError:
+                pass
+        
+        return (None, None)
+    
+    def extract_elements(self, mgm_root: ET.Element) -> List[BaseElement]:
+        """
+        Extract elements from mxGraphModel and convert to intermediate model
+        
+        Args:
+            mgm_root: mxGraphModel element
+        
+        Returns:
+            List of elements
+        """
+        elements = []
+
+        # Preserve draw.io stacking order.
+        #
+        # In mxGraphModel, the relative stacking / draw order is primarily encoded by the order of
+        # mxCell nodes under <root>. PowerPoint stacking is determined by the order of shapes in
+        # the slide XML (later = topmost), so we map mxCell order to BaseElement.z_index.
+        #
+        # NOTE: We still extract shapes first to build shapes_dict for connector routing; z_index
+        #       sorting will restore the original order afterwards.
+        cells = list(mgm_root.findall(".//mxCell"))
+        cell_order: Dict[str, int] = {}
+        for idx, cell in enumerate(cells):
+            cid = cell.attrib.get("id")
+            if cid is not None and cid not in cell_order:
+                cell_order[cid] = idx
+        
+        # First extract shapes
+        shapes_dict = {}
+        for cell in cells:
+            if cell.attrib.get("vertex") == "1":
+                shape = self._extract_shape(cell, mgm_root)
+                if shape:
+                    try:
+                        if shape.id is not None:
+                            shape.z_index = cell_order.get(shape.id, 0)
+                    except Exception:
+                        pass
+                    elements.append(shape)
+                    if shape.id:
+                        shapes_dict[shape.id] = shape
+        
+        # Then extract edges
+        for cell in cells:
+            if cell.attrib.get("edge") == "1":
+                connector = self._extract_connector(cell, mgm_root, shapes_dict)
+                if connector:
+                    try:
+                        if connector.id is not None:
+                            connector.z_index = cell_order.get(connector.id, 0)
+                    except Exception:
+                        pass
+                    elements.append(connector)
+        
+        # Sort by Z-order
+        elements.sort(key=lambda e: e.z_index)
+        
+        return elements
+    
+    def _extract_shape(self, cell: ET.Element, mgm_root: ET.Element) -> Optional[ShapeElement]:
+        """Extract shape"""
+        geo = cell.find(".//mxGeometry")
+        if geo is None:
+            return None
+        
+        try:
+            x = float(geo.attrib.get("x", "0") or 0)
+            y = float(geo.attrib.get("y", "0") or 0)
+            w = float(geo.attrib.get("width", "0") or 0)
+            h = float(geo.attrib.get("height", "0") or 0)
+        except ValueError:
+            return None
+        
+        # Basic information
+        shape_id = cell.attrib.get("id")
+        text_raw = cell.attrib.get("value", "") or ""
+        
+        # Extract style
+        fill_color = self.style_extractor.extract_fill_color(cell)
+        gradient_color = self.style_extractor.extract_gradient_color(cell)
+        gradient_direction = self.style_extractor.extract_gradient_direction(cell)
+        stroke_color = self.style_extractor.extract_stroke_color(cell)
+        font_color = self.style_extractor.extract_font_color(cell)
+        label_bg_color = self.style_extractor.extract_label_background_color(cell)
+        has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
+        shape_type = self.style_extractor.extract_shape_type(cell)
+        
+        style_str = cell.attrib.get("style", "")
+        stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
+        
+        # Extract whiteSpace (text wrapping) setting
+        # draw.io: whiteSpace=wrap (default) enables text wrapping, whiteSpace=nowrap disables it
+        white_space = self.style_extractor.extract_style_value(style_str, "whiteSpace")
+        word_wrap = True  # Default is wrap (draw.io's default)
+        if white_space and white_space.lower() == "nowrap":
+            word_wrap = False
+        
+        # Extract text
+        text_paragraphs = self._extract_text(text_raw, font_color, style_str)
+        
+        # Create style
+        style = Style(
+            fill=fill_color,
+            gradient_color=gradient_color,
+            gradient_direction=gradient_direction,
+            stroke=stroke_color,
+            stroke_width=stroke_width,
+            opacity=1.0,
+            label_background_color=label_bg_color,
+            has_shadow=has_shadow,
+            word_wrap=word_wrap
+        )
+        
+        # Create ShapeElement
+        shape = ShapeElement(
+            id=shape_id,
+            x=x,
+            y=y,
+            w=w,
+            h=h,
+            shape_type=shape_type,
+            text=text_paragraphs,
+            style=style,
+            z_index=0  # TODO: extract z-index
+        )
+        
+        return shape
+    
+    def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> Optional[ConnectorElement]:
+        """Extract connector"""
+        source_id = cell.attrib.get("source")
+        target_id = cell.attrib.get("target")
+        
+        if not source_id or not target_id:
+            return None
+        
+        source_shape = shapes_dict.get(source_id)
+        target_shape = shapes_dict.get(target_id)
+        
+        if not source_shape or not target_shape:
+            return None
+        
+        connector_id = cell.attrib.get("id")
+        style_str = cell.attrib.get("style", "")
+        
+        # Extract style
+        stroke_color = self.style_extractor.extract_stroke_color(cell)
+        stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
+        has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
+        
+        # Edge style
+        edge_style = "straight"
+        edge_style_str = self.style_extractor.extract_style_value(style_str, "edgeStyle")
+        if edge_style_str:
+            if "orthogonal" in edge_style_str.lower():
+                edge_style = "orthogonal"
+            elif "curved" in edge_style_str.lower():
+                edge_style = "curved"
+        
+        # Arrow settings
+        start_arrow = self.style_extractor.extract_style_value(style_str, "startArrow")
+        end_arrow = self.style_extractor.extract_style_value(style_str, "endArrow")
+        start_fill = self.style_extractor.extract_style_value(style_str, "startFill") != "0"
+        end_fill = self.style_extractor.extract_style_value(style_str, "endFill") != "0"
+        start_size = self.style_extractor.extract_style_float(style_str, "startSize", None)
+        end_size = self.style_extractor.extract_style_float(style_str, "endSize", None)
+
+        # draw.io can omit default arrow styles from the edge `style` string.
+        # In diagrams.net, a newly created connector typically has an arrow at the target side by default.
+        # When the mxGraphModel sets arrows="1", treat missing endArrow as the default "classic".
+        if end_arrow is None:
+            try:
+                if mgm_root is not None and mgm_root.attrib.get("arrows") == "1":
+                    end_arrow = "classic"
+            except Exception:
+                pass
+        
+        # Extract points (execute first for automatic port determination)
+        geo = cell.find(".//mxGeometry")
+        points_raw = []
+        if geo is not None:
+            # Find Array[@as="points"] (drawio's waypoints are stored here)
+            array_elem = geo.find('./Array[@as="points"]')
+            if array_elem is not None:
+                # Find mxPoint as direct child of Array
+                for point_elem in array_elem.findall("./mxPoint"):
+                    px = float(point_elem.attrib.get("x", "0") or 0)
+                    py = float(point_elem.attrib.get("y", "0") or 0)
+                    points_raw.append((px, py))
+            else:
+                # If Array is not present, find mxPoint as direct child of mxGeometry
+                for point_elem in geo.findall("./mxPoint"):
+                    px = float(point_elem.attrib.get("x", "0") or 0)
+                    py = float(point_elem.attrib.get("y", "0") or 0)
+                    points_raw.append((px, py))
+
+        def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
+            """
+            Infer which side a port points to.
+
+            This is used to decide whether exitX/exitY (or entryX/entryY) contradict
+            the orthogonal route implied by waypoints.
+
+            Returns: 'left' | 'right' | 'top' | 'bottom' | None (ambiguous)
+            """
+            if rel_x is None or rel_y is None:
+                return None
+            dx = abs(rel_x - 0.5)
+            dy = abs(rel_y - 0.5)
+            if dx < 1e-9 and dy < 1e-9:
+                return None
+            if dx >= dy:
+                return "right" if rel_x >= 0.5 else "left"
+            return "bottom" if rel_y >= 0.5 else "top"
+
+        def _snap_to_grid(val: float, grid_size: Optional[float]) -> float:
+            """Snap a coordinate to draw.io grid."""
+            if not grid_size:
+                return val
+            try:
+                if grid_size <= 0:
+                    return val
+                return round(val / grid_size) * grid_size
+            except Exception:
+                return val
+
+        def _ensure_orthogonal_route_respects_ports(
+            pts: List[tuple],
+            exit_x_: Optional[float],
+            exit_y_: Optional[float],
+            entry_x_: Optional[float],
+            entry_y_: Optional[float],
+            grid_size_: Optional[float],
+        ) -> List[tuple]:
+            """
+            Ensure an orthogonal connector polyline respects the exit/entry side direction.
+
+            When draw.io stores no waypoints for an orthogonal edge, we still must honor port sides:
+            - If entry is on left/right, the segment adjacent to the target must be horizontal.
+            - If entry is on top/bottom, the segment adjacent to the target must be vertical.
+
+            A single-bend L-shape cannot satisfy both ends when both ends require the same orientation
+            (e.g., exit=right and entry=left => both horizontal). In that case, generate 2 bends:
+            - H-V-H or V-H-V with a snapped midpoint.
+            """
+            if not pts or len(pts) != 2:
+                return pts
+            (sx, sy), (tx, ty) = pts
+            if sx == tx or sy == ty:
+                return pts
+
+            exit_side = _infer_port_side(exit_x_, exit_y_)
+            entry_side = _infer_port_side(entry_x_, entry_y_)
+
+            def _dir_for_side(side: Optional[str]) -> Optional[str]:
+                if side in ("left", "right"):
+                    return "h"
+                if side in ("top", "bottom"):
+                    return "v"
+                return None
+
+            start_dir = _dir_for_side(exit_side)
+            end_dir = _dir_for_side(entry_side)
+
+            # Fallback to legacy heuristic when ambiguous.
+            if start_dir is None or end_dir is None:
+                dx_ = abs(tx - sx)
+                dy_ = abs(ty - sy)
+                if dx_ >= dy_:
+                    return [(sx, sy), (tx, sy), (tx, ty)]
+                return [(sx, sy), (sx, ty), (tx, ty)]
+
+            # Different orientations can be satisfied with a single bend (2 segments).
+            if start_dir == "h" and end_dir == "v":
+                return [(sx, sy), (tx, sy), (tx, ty)]
+            if start_dir == "v" and end_dir == "h":
+                return [(sx, sy), (sx, ty), (tx, ty)]
+
+            # Same orientation at both ends requires 2 bends (3 segments).
+            if start_dir == "h" and end_dir == "h":
+                x_mid = _snap_to_grid((sx + tx) / 2.0, grid_size_)
+                # Avoid zero-length segments after snapping.
+                if x_mid == sx:
+                    x_mid = _snap_to_grid(sx + (grid_size_ or 10.0), grid_size_)
+                if x_mid == tx:
+                    x_mid = _snap_to_grid(tx - (grid_size_ or 10.0), grid_size_)
+                return [(sx, sy), (x_mid, sy), (x_mid, ty), (tx, ty)]
+
+            if start_dir == "v" and end_dir == "v":
+                y_mid = _snap_to_grid((sy + ty) / 2.0, grid_size_)
+                if y_mid == sy:
+                    y_mid = _snap_to_grid(sy + (grid_size_ or 10.0), grid_size_)
+                if y_mid == ty:
+                    y_mid = _snap_to_grid(ty - (grid_size_ or 10.0), grid_size_)
+                return [(sx, sy), (sx, y_mid), (tx, y_mid), (tx, ty)]
+
+            return pts
+
+        def _build_default_orthogonal_points(
+            source_shape_: ShapeElement,
+            target_shape_: ShapeElement,
+            exit_dx_: float,
+            exit_dy_: float,
+            entry_dx_: float,
+            entry_dy_: float,
+        ) -> List[tuple]:
+            """
+            Build a reasonable default orthogonal polyline when draw.io doesn't store waypoints.
+
+            We evaluate two 1-bend patterns:
+              - HV: horizontal then vertical (mid = (target_x, source_y))
+              - VH: vertical then horizontal (mid = (source_x, target_y))
+
+            The chosen pattern also determines which sides to use at each end so the
+            segment adjacent to the target can go vertically when needed (e.g. "downward from ellipse").
+            """
+            sx_c = source_shape_.x + source_shape_.w / 2.0
+            sy_c = source_shape_.y + source_shape_.h / 2.0
+            tx_c = target_shape_.x + target_shape_.w / 2.0
+            ty_c = target_shape_.y + target_shape_.h / 2.0
+
+            # Candidate A: HV (exit left/right, entry top/bottom)
+            exit_a_x = 1.0 if tx_c >= sx_c else 0.0
+            exit_a_y = 0.5
+            entry_a_x = 0.5
+            entry_a_y = 1.0 if sy_c >= ty_c else 0.0  # comes from below -> bottom, from above -> top
+
+            p1a = self._calculate_boundary_point(source_shape_, exit_a_x, exit_a_y, exit_dx_, exit_dy_)
+            p2a = self._calculate_boundary_point(target_shape_, entry_a_x, entry_a_y, entry_dx_, entry_dy_)
+            if p1a[0] == p2a[0] or p1a[1] == p2a[1]:
+                points_a = [p1a, p2a]
+                len_a = abs(p2a[0] - p1a[0]) + abs(p2a[1] - p1a[1])
+            else:
+                mid_a = (p2a[0], p1a[1])
+                points_a = [p1a, mid_a, p2a]
+                len_a = abs(mid_a[0] - p1a[0]) + abs(mid_a[1] - p1a[1]) + abs(p2a[0] - mid_a[0]) + abs(p2a[1] - mid_a[1])
+
+            # Candidate B: VH (exit top/bottom, entry left/right)
+            exit_b_x = 0.5
+            exit_b_y = 1.0 if ty_c >= sy_c else 0.0  # towards target
+            entry_b_x = 1.0 if sx_c >= tx_c else 0.0  # comes from right -> right, from left -> left
+            entry_b_y = 0.5
+
+            p1b = self._calculate_boundary_point(source_shape_, exit_b_x, exit_b_y, exit_dx_, exit_dy_)
+            p2b = self._calculate_boundary_point(target_shape_, entry_b_x, entry_b_y, entry_dx_, entry_dy_)
+            if p1b[0] == p2b[0] or p1b[1] == p2b[1]:
+                points_b = [p1b, p2b]
+                len_b = abs(p2b[0] - p1b[0]) + abs(p2b[1] - p1b[1])
+            else:
+                mid_b = (p1b[0], p2b[1])
+                points_b = [p1b, mid_b, p2b]
+                len_b = abs(mid_b[0] - p1b[0]) + abs(mid_b[1] - p1b[1]) + abs(p2b[0] - mid_b[0]) + abs(p2b[1] - mid_b[1])
+
+            return points_a if len_a <= len_b else points_b
+
+        # Calculate connection points (automatically infer ports if not specified)
+        exit_x_val = self.style_extractor.extract_style_float(style_str, "exitX")
+        exit_y_val = self.style_extractor.extract_style_float(style_str, "exitY")
+        entry_x_val = self.style_extractor.extract_style_float(style_str, "entryX")
+        entry_y_val = self.style_extractor.extract_style_float(style_str, "entryY")
+        exit_dx = self.style_extractor.extract_style_float(style_str, "exitDx", 0.0)
+        exit_dy = self.style_extractor.extract_style_float(style_str, "exitDy", 0.0)
+        entry_dx = self.style_extractor.extract_style_float(style_str, "entryDx", 0.0)
+        entry_dy = self.style_extractor.extract_style_float(style_str, "entryDy", 0.0)
+        grid_size = None
+        try:
+            if mgm_root is not None:
+                grid_size = float(mgm_root.attrib.get("gridSize", "0") or 0) or None
+        except Exception:
+            grid_size = None
+
+        # If draw.io doesn't store waypoints and explicit ports are also missing,
+        # build a better default orthogonal polyline by evaluating HV/VH patterns.
+        if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
+            points = _build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
+            source_x, source_y = points[0]
+            target_x, target_y = points[-1]
+        else:
+            if edge_style == "orthogonal":
+                auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
+                    source_shape, target_shape, points_raw
+                )
+            else:
+                auto_exit_x = auto_exit_y = auto_entry_x = auto_entry_y = 0.5
+
+            exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
+            exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
+            entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
+            entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
+
+            # For orthogonal edges with waypoints, prefer the side implied by the first/last waypoint
+            # when the declared port contradicts it.
+            if edge_style == "orthogonal" and points_raw:
+                declared_exit_side = _infer_port_side(exit_x, exit_y)
+                implied_exit_side = _infer_port_side(auto_exit_x, auto_exit_y)
+                if implied_exit_side and declared_exit_side != implied_exit_side:
+                    exit_x, exit_y = auto_exit_x, auto_exit_y
+
+                declared_entry_side = _infer_port_side(entry_x, entry_y)
+                implied_entry_side = _infer_port_side(auto_entry_x, auto_entry_y)
+                if implied_entry_side and declared_entry_side != implied_entry_side:
+                    entry_x, entry_y = auto_entry_x, auto_entry_y
+
+            # Calculate connection points
+            source_x, source_y = self._calculate_boundary_point(
+                source_shape, exit_x, exit_y, exit_dx, exit_dy
+            )
+            target_x, target_y = self._calculate_boundary_point(
+                target_shape, entry_x, entry_y, entry_dx, entry_dy
+            )
+        
+        # Build points
+        if 'points' not in locals():
+            points = []
+            if not points_raw:
+                points = [(source_x, source_y), (target_x, target_y)]
+            else:
+                points = list(points_raw)
+                # drawio's <Array as="points"> contains only waypoints
+                # Start and end points are not included, so they need to be added before and after
+                # Insert start point at the beginning
+                points.insert(0, (source_x, source_y))
+                # Append end point at the end
+                points.append((target_x, target_y))
+        
+        # For orthogonalEdgeStyle, add one intermediate point to create an L-shape (2 segments)
+        # even if there are no intermediate points
+        if edge_style == "orthogonal" and len(points) == 2:
+            # For connectors without stored waypoints, ensure the route respects the declared/auto ports.
+            # This is crucial when entry/exit are on left/right: the last segment must be horizontal.
+            try:
+                points = _ensure_orthogonal_route_respects_ports(
+                    points,
+                    exit_x if "exit_x" in locals() else None,
+                    exit_y if "exit_y" in locals() else None,
+                    entry_x if "entry_x" in locals() else None,
+                    entry_y if "entry_y" in locals() else None,
+                    grid_size,
+                )
+            except Exception:
+                # Keep the original points on any unexpected failure.
+                pass
+        
+        # Create style
+        style = Style(
+            stroke=stroke_color,
+            stroke_width=stroke_width,
+            arrow_start=start_arrow,
+            arrow_end=end_arrow,
+            arrow_start_fill=start_fill,
+            arrow_end_fill=end_fill,
+            arrow_start_size_px=start_size,
+            arrow_end_size_px=end_size,
+            has_shadow=has_shadow
+        )
+        
+        # Create ConnectorElement
+        connector = ConnectorElement(
+            id=connector_id,
+            source_id=source_id,
+            target_id=target_id,
+            points=points,
+            edge_style=edge_style,
+            style=style,
+            z_index=0  # TODO: extract z-index
+        )
+        
+        return connector
+    
+    def _calculate_boundary_point(self, shape: ShapeElement, rel_x: float, rel_y: float, offset_x: float, offset_y: float) -> tuple:
+        """
+        Calculate connection point on shape boundary
+        
+        rel_x, rel_y: Relative coordinates (0.0-1.0)
+        - 0.0 = left/top edge
+        - 0.5 = center
+        - 1.0 = right/bottom edge
+        
+        Returns: (x, y) tuple (absolute coordinates)
+        """
+        # Correction based on shape type
+        shape_type = shape.shape_type.lower() if shape.shape_type else ""
+
+        # Base point from rel_x/rel_y (offset is applied only once at the end)
+        base_x = shape.x + shape.w * rel_x
+        base_y = shape.y + shape.h * rel_y
+
+        # Apply correction for special shapes
+        if "parallelogram" in shape_type:
+            # For parallelograms, rel_x/rel_y often refers to "position on edge" (e.g., exitX=1, exitY=0.5 is the midpoint of the right edge).
+            # If processed with nearest neighbor projection, it may deviate from the midpoint (especially on left/right edges), resulting in appearing "inside the edge".
+            # Therefore, for boundary specifications (rel_x/rel_y near 0/1), use linear interpolation on the corresponding edge to ensure it is always on the edge.
+            #
+            # Furthermore, PPTX's parallelogram tends to have adjust values that affect "horizontal offset amount based on height",
+            # and if estimated based on width, the diagonal edge becomes too slanted and connection points tend to go inside. Here, we calculate the offset based on height.
+            skew = float(PARALLELOGRAM_SKEW)
+            skew = max(0.0, min(skew, 0.49))
+
+            x0, y0, w, h = shape.x, shape.y, shape.w, shape.h
+            # Horizontal offset amount (px)
+            offset = skew * h
+            # Suppress if offset is too large (would cause edge reversal) (less than half of w)
+            offset = max(0.0, min(offset, w * 0.49))
+
+            # Default parallelogram tilted to the right (equivalent to PPT's parallelogram)
+            tl = (x0 + offset, y0)       # top-left
+            tr = (x0 + w, y0)            # top-right
+            br = (x0 + w - offset, y0 + h)  # bottom-right
+            bl = (x0, y0 + h)            # bottom-left
+
+            def _lerp(a: tuple, b: tuple, t: float) -> tuple:
+                return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+            def _closest_point_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> tuple:
+                abx = bx - ax
+                aby = by - ay
+                apx = px - ax
+                apy = py - ay
+                denom = abx * abx + aby * aby
+                if denom <= 1e-12:
+                    return ax, ay
+                t = (apx * abx + apy * aby) / denom
+                t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+                return ax + t * abx, ay + t * aby
+
+            eps = 1e-9
+            if rel_x <= 0.0 + eps:
+                # Left edge (top-left -> bottom-left)
+                x, y = _lerp(tl, bl, rel_y)
+            elif rel_x >= 1.0 - eps:
+                # Right edge (top-right -> bottom-right)
+                x, y = _lerp(tr, br, rel_y)
+            elif rel_y <= 0.0 + eps:
+                # Top edge (top-left -> top-right)
+                x, y = _lerp(tl, tr, rel_x)
+            elif rel_y >= 1.0 - eps:
+                # Bottom edge (bottom-left -> bottom-right)
+                x, y = _lerp(bl, br, rel_x)
+            else:
+                # For internal specification, project to nearest edge
+                poly = [tl, tr, br, bl]
+                best_x, best_y = poly[0]
+                best_d2 = float("inf")
+                for i in range(len(poly)):
+                    ax, ay = poly[i]
+                    bx, by = poly[(i + 1) % len(poly)]
+                    cx, cy = _closest_point_on_segment(base_x, base_y, ax, ay, bx, by)
+                    dx = base_x - cx
+                    dy = base_y - cy
+                    d2 = dx * dx + dy * dy
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_x, best_y = cx, cy
+                x, y = best_x, best_y
+
+        elif "rhombus" in shape_type:
+            # Correction for rhombus
+            cx = shape.x + shape.w / 2
+            cy = shape.y + shape.h / 2
+            dx = base_x - cx
+            dy = base_y - cy
+            
+            if shape.w > 0:
+                denom = (abs(dx) / (shape.w / 2)) + (abs(dy) / (shape.h / 2))
+                if denom > 0:
+                    t = 1.0 / denom
+                    x = cx + t * dx
+                    y = cy + t * dy
+                else:
+                    x = base_x
+                    y = base_y
+            else:
+                x = base_x
+                y = base_y
+        elif "ellipse" in shape_type or "circle" in shape_type:
+            # Correction for ellipse
+            cx = shape.x + shape.w / 2
+            cy = shape.y + shape.h / 2
+            dx = base_x - cx
+            dy = base_y - cy
+            
+            if shape.w > 0 and shape.h > 0:
+                denom_sq = (dx / (shape.w / 2))**2 + (dy / (shape.h / 2))**2
+                if denom_sq > 0:
+                    t = 1.0 / (denom_sq ** 0.5)
+                    x = cx + t * dx
+                    y = cy + t * dy
+                else:
+                    x = base_x
+                    y = base_y
+            else:
+                x = base_x
+                y = base_y
+        else:
+            # Normal rectangle (follow legacy implementation)
+            if rel_x <= 0.0:
+                # Left edge
+                x = shape.x
+                y = base_y
+            elif rel_x >= 1.0:
+                # Right edge
+                x = shape.x + shape.w
+                y = base_y
+            elif rel_y <= 0.0:
+                # Top edge
+                x = base_x
+                y = shape.y
+            elif rel_y >= 1.0:
+                # Bottom edge
+                x = base_x
+                y = shape.y + shape.h
+            else:
+                # For intermediate points, select nearest edge
+                dist_left = abs(base_x - shape.x)
+                dist_right = abs(base_x - (shape.x + shape.w))
+                dist_top = abs(base_y - shape.y)
+                dist_bottom = abs(base_y - (shape.y + shape.h))
+                
+                min_dist = min(dist_left, dist_right, dist_top, dist_bottom)
+                
+                if min_dist == dist_left:
+                    x = shape.x
+                    y = base_y
+                elif min_dist == dist_right:
+                    x = shape.x + shape.w
+                    y = base_y
+                elif min_dist == dist_top:
+                    x = base_x
+                    y = shape.y
+                else:  # dist_bottom
+                    x = base_x
+                    y = shape.y + shape.h
+
+        # Add offset only once (exitDx/exitDy, entryDx/entryDy)
+        x += offset_x
+        y += offset_y
+
+        return (x, y)
+
+    def _auto_determine_ports(self, source_shape: ShapeElement, target_shape: ShapeElement, points: List[tuple] = None) -> tuple:
+        """
+        Determine default ports when exit/entry are not specified for orthogonalEdgeStyle
+        
+        If points (waypoints) are specified, determine ports based on direction to first/last point.
+        
+        Returns:
+            (exit_x, exit_y, entry_x, entry_y) relative coordinates
+        """
+        sx = source_shape.x + source_shape.w / 2
+        sy = source_shape.y + source_shape.h / 2
+        tx = target_shape.x + target_shape.w / 2
+        ty = target_shape.y + target_shape.h / 2
+        
+        eps = 1e-6
+
+        # --- Exit Port Determination ---
+        # If points exist, look at direction to first point
+        if points:
+            first_point = points[0]
+            dx = first_point[0] - sx
+            dy = first_point[1] - sy
+        else:
+            # Otherwise, direction to target center
+            dx = tx - sx
+            dy = ty - sy
+
+        dx_abs = abs(dx)
+        dy_abs = abs(dy)
+        
+        if dx_abs >= dy_abs:
+            # Exit horizontally
+            if dx > eps:
+                exit_x = 1.0  # Right
+            elif dx < -eps:
+                exit_x = 0.0  # Left
+            else:
+                exit_x = 0.5
+            exit_y = 0.5
+        else:
+            # Exit vertically
+            if dy > eps:
+                exit_y = 1.0  # Bottom
+            elif dy < -eps:
+                exit_y = 0.0  # Top
+            else:
+                exit_y = 0.5
+            exit_x = 0.5
+
+        # --- Entry Port Determination ---
+        # If points exist, look at direction from last point
+        if points:
+            last_point = points[-1]
+            # Direction of last point from target center (entering from there)
+            dx_entry = last_point[0] - tx
+            dy_entry = last_point[1] - ty
+        else:
+            # Otherwise, direction from Source center
+            dx_entry = sx - tx
+            dy_entry = sy - ty
+            
+        dx_entry_abs = abs(dx_entry)
+        dy_entry_abs = abs(dy_entry)
+        
+        if dx_entry_abs >= dy_entry_abs:
+            # Enter from horizontal direction (i.e., left/right edges)
+            if dx_entry > eps:
+                entry_x = 1.0 # Enter from right edge
+            elif dx_entry < -eps:
+                entry_x = 0.0 # Enter from left edge
+            else:
+                entry_x = 0.5
+            entry_y = 0.5
+        else:
+            # Enter from vertical direction (top/bottom edges)
+            if dy_entry > eps:
+                entry_y = 1.0 # Enter from bottom edge
+            elif dy_entry < -eps:
+                entry_y = 0.0 # Enter from top edge
+            else:
+                entry_y = 0.5
+            entry_x = 0.5
+
+        return exit_x, exit_y, entry_x, entry_y
+    
+    def _extract_text(self, text_raw: str, font_color: Optional[RGBColor], style_str: str) -> List[TextParagraph]:
+        """Extract text and convert to paragraph list"""
+        # Decode HTML entities
+        import html as html_module
+        if "&lt;" in text_raw or "&gt;" in text_raw or "&amp;" in text_raw:
+            text_raw = html_module.unescape(text_raw)
+        
+        # If HTML tags exist, extract from HTML
+        if "<" in text_raw and ">" in text_raw:
+            try:
+                wrapped = f"<div>{text_raw}</div>"
+                parsed = lxml_html.fromstring(wrapped)
+                # Extract paragraphs from HTML
+                paragraphs = self._extract_text_from_html(parsed, font_color, style_str)
+                if paragraphs:
+                    return paragraphs
+            except Exception:
+                pass
+        
+        # Process as plain text if HTML is not present or parsing fails
+        plain_text = text_raw
+        if "<" in plain_text and ">" in plain_text:
+            try:
+                wrapped = f"<div>{plain_text}</div>"
+                parsed = lxml_html.fromstring(wrapped)
+                plain_text = parsed.text_content()
+            except Exception:
+                pass
+        
+        if not plain_text:
+            return []
+        
+        # Extract text properties from style
+        fontSize = self.style_extractor.extract_style_float(style_str, "fontSize")
+        fontFamily = self.style_extractor.extract_style_value(style_str, "fontFamily")
+        # Treat empty string as None
+        if fontFamily == "":
+            fontFamily = None
+        # Use draw.io's default font if font is not specified
+        if fontFamily is None:
+            fontFamily = DRAWIO_DEFAULT_FONT_FAMILY
+        fontStyle_str = self.style_extractor.extract_style_value(style_str, "fontStyle")
+        font_style_flags = self.style_extractor._parse_font_style(fontStyle_str)
+        bold = font_style_flags['bold']
+        italic = font_style_flags['italic']
+        underline = font_style_flags['underline']
+        
+        align = self.style_extractor.extract_style_value(style_str, "align")
+        vertical_align = self.style_extractor.extract_style_value(style_str, "verticalAlign")
+        spacing_top = self.style_extractor.extract_style_float(style_str, "spacingTop")
+        spacing_left = self.style_extractor.extract_style_float(style_str, "spacingLeft")
+        spacing_bottom = self.style_extractor.extract_style_float(style_str, "spacingBottom")
+        spacing_right = self.style_extractor.extract_style_float(style_str, "spacingRight")
+        
+        # Create paragraph
+        paragraph = TextParagraph(
+            runs=[TextRun(
+                text=plain_text,
+                font_family=fontFamily,
+                font_size=fontSize,
+                font_color=font_color,
+                bold=bold,
+                italic=italic,
+                underline=underline
+            )],
+            align=align.lower() if align else None,
+            vertical_align=vertical_align.lower() if vertical_align else None,
+            spacing_top=spacing_top,
+            spacing_left=spacing_left,
+            spacing_bottom=spacing_bottom,
+            spacing_right=spacing_right
+        )
+        
+        return [paragraph]
+    
+    def _extract_text_from_html(self, root_elem, default_font_color: Optional[RGBColor], style_str: str) -> List[TextParagraph]:
+        """Extract text paragraphs from HTML element"""
+        from ..mapping.text_map import html_to_paragraphs
+        
+        # Convert HTML back to string
+        html_text = lxml_html.tostring(root_elem, encoding='unicode', method='html')
+        # Remove <div> tags
+        if html_text.startswith('<div>') and html_text.endswith('</div>'):
+            html_text = html_text[5:-6]
+        
+        # Extract default font information
+        default_font_size = self.style_extractor.extract_style_float(style_str, "fontSize")
+        default_font_family = self.style_extractor.extract_style_value(style_str, "fontFamily")
+        # Treat empty string as None
+        if default_font_family == "":
+            default_font_family = None
+        # Use draw.io's default font if font is not specified
+        if default_font_family is None:
+            default_font_family = DRAWIO_DEFAULT_FONT_FAMILY
+        default_font_style = self.style_extractor.extract_style_value(style_str, "fontStyle")
+        default_font_style_flags = self.style_extractor._parse_font_style(default_font_style)
+        # Note: bold/italic/underline are extracted from HTML, so defaults are not used
+        
+        # Extract paragraphs from HTML (using text_map)
+        paragraphs = html_to_paragraphs(html_text, default_font_color,
+                                       default_font_family, default_font_size)
+        
+        # Apply default font information to each run
+        for para in paragraphs:
+            for run in para.runs:
+                # Also treat empty string as None
+                if not run.font_family:
+                    run.font_family = default_font_family
+                # If still None, use draw.io's default font
+                if run.font_family is None:
+                    run.font_family = DRAWIO_DEFAULT_FONT_FAMILY
+                if run.font_size is None:
+                    run.font_size = default_font_size
+                if run.font_color is None:
+                    run.font_color = default_font_color
+                # bold/italic/underline are extracted from HTML, so don't apply defaults
+        
+        # Set paragraph alignment information
+        # Mapping: style key -> (para attribute, extractor method, transform function)
+        para_attr_map = {
+            'align': ('align', self.style_extractor.extract_style_value, lambda v: v.lower() if v else None),
+            'verticalAlign': ('vertical_align', self.style_extractor.extract_style_value, lambda v: v.lower() if v else None),
+            'spacingTop': ('spacing_top', self.style_extractor.extract_style_float, lambda v: v),
+            'spacingLeft': ('spacing_left', self.style_extractor.extract_style_float, lambda v: v),
+            'spacingBottom': ('spacing_bottom', self.style_extractor.extract_style_float, lambda v: v),
+            'spacingRight': ('spacing_right', self.style_extractor.extract_style_float, lambda v: v),
+        }
+        
+        extracted_values = {}
+        for style_key, (attr_name, extractor, transform) in para_attr_map.items():
+            value = extractor(style_str, style_key)
+            extracted_values[attr_name] = transform(value)
+        
+        for para in paragraphs:
+            for attr_name, value in extracted_values.items():
+                if getattr(para, attr_name) is None:
+                    setattr(para, attr_name, value)
+        
+        return paragraphs
