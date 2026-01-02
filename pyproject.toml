@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drawio2pptx"
+version = "0.0.1"
+description = "Convert draw.io (diagrams.net) files to PowerPoint (.pptx) format - mxGraph to PresentationML converter"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "mashu3"}
+]
+keywords = ["drawio", "diagrams.net", "powerpoint", "pptx", "converter", "mxgraph", "presentationml"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "python-pptx>=0.6.21",
+    "lxml>=4.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "coverage>=7.0.0",
+]
+
+[project.scripts]
+drawio2pptx = "drawio2pptx.main:main"
+
+[project.urls]
+Homepage = "https://github.com/mashu3/drawio2pptx"
+Repository = "https://github.com/mashu3/drawio2pptx"
+Issues = "https://github.com/mashu3/drawio2pptx/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["tests*", "*.egg-info*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=drawio2pptx",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--tb=short",
+    "-v"
+]
