@@ -595,6 +595,15 @@ class DrawIOLoader:
         if white_space and white_space.lower() == "nowrap":
             word_wrap = False
         
+        # Extract rounded attribute (corner radius)
+        # draw.io: rounded=1 enables corner radius, rounded=0 disables it
+        corner_radius = None
+        rounded_str = self.style_extractor.extract_style_value(style_str, "rounded")
+        if rounded_str and rounded_str.strip() == "1":
+            # Calculate default corner radius (approximately 10% of min dimension)
+            if min(w, h) > 0:
+                corner_radius = min(w, h) * 0.1
+        
         # Extract text
         text_paragraphs = self._extract_text(text_raw, font_color, style_str)
         
@@ -606,6 +615,7 @@ class DrawIOLoader:
             stroke=stroke_color,
             stroke_width=stroke_width,
             opacity=1.0,
+            corner_radius=corner_radius,
             label_background_color=label_bg_color,
             has_shadow=has_shadow,
             word_wrap=word_wrap
@@ -689,6 +699,9 @@ class DrawIOLoader:
                     points_raw.append((px, py))
             else:
                 # If Array is not present, find mxPoint as direct child of mxGeometry
+                # Note: mxPoint with as="offset" are label offsets, not waypoints.
+                # However, we include them in points_raw to maintain backward compatibility
+                # with the original behavior for endpoint calculation.
                 for point_elem in geo.findall("./mxPoint"):
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
@@ -912,10 +925,15 @@ class DrawIOLoader:
         # Build points
         if 'points' not in locals():
             points = []
-            if not points_raw:
+            # Filter out (0.0, 0.0) waypoints that come from as="offset" mxPoint elements
+            # These are label offsets, not actual waypoints, but we need to maintain
+            # backward compatibility for endpoint calculation
+            filtered_points_raw = [p for p in points_raw if p != (0.0, 0.0)]
+            
+            if not filtered_points_raw:
                 points = [(source_x, source_y), (target_x, target_y)]
             else:
-                points = list(points_raw)
+                points = list(filtered_points_raw)
                 # drawio's <Array as="points"> contains only waypoints
                 # Start and end points are not included, so they need to be added before and after
                 # Insert start point at the beginning
