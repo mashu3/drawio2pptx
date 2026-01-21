@@ -11,7 +11,7 @@ from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR  # type: ignore[import]
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR  # type: ignore[import]
 from pptx.dml.color import RGBColor  # type: ignore[import]
 
-from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextParagraph, TextRun
+from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
@@ -94,6 +94,8 @@ class PPTXWriter:
                 self._add_shape(slide, element)
             elif isinstance(element, ConnectorElement):
                 self._add_connector(slide, element)
+            elif isinstance(element, TextElement):
+                self._add_text(slide, element)
     
     def _add_shape(self, slide, shape: ShapeElement):
         """Add shape"""
@@ -347,6 +349,43 @@ class PPTXWriter:
                 self._disable_shadow_xml(line_shape)
         
         return line_shape
+
+    def _add_text(self, slide, text_element: TextElement):
+        """Add standalone text element."""
+        if text_element.w <= 0 or text_element.h <= 0:
+            return None
+
+        left = px_to_emu(text_element.x)
+        top = px_to_emu(text_element.y)
+        width = px_to_emu(text_element.w)
+        height = px_to_emu(text_element.h)
+
+        tb = slide.shapes.add_textbox(left, top, width, height)
+        try:
+            if text_element.id:
+                tb.name = f"drawio2pptx:text:{text_element.id}"
+        except Exception:
+            pass
+
+        # Make the text box background transparent.
+        try:
+            tb.fill.background()
+        except Exception:
+            pass
+        try:
+            tb.line.fill.background()
+        except Exception:
+            pass
+
+        if text_element.text:
+            self._set_text_frame(
+                tb.text_frame,
+                text_element.text,
+                default_highlight_color=text_element.style.label_background_color,
+                word_wrap=text_element.style.word_wrap,
+            )
+
+        return tb
     
     def _add_orthogonal_connector(self, slide, connector: ConnectorElement):
         """Add polyline as straight connectors for each segment"""
