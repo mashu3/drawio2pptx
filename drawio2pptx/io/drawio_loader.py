@@ -12,7 +12,7 @@ from lxml import html as lxml_html
 from pptx.dml.color import RGBColor  # type: ignore[import]
 
 from ..model.intermediate import (
-    ShapeElement, ConnectorElement, BaseElement,
+    ShapeElement, ConnectorElement, BaseElement, TextElement,
     Transform, Style, TextParagraph, TextRun
 )
 from ..logger import ConversionLogger
@@ -543,7 +543,7 @@ class DrawIOLoader:
         # Then extract edges
         for cell in cells:
             if cell.attrib.get("edge") == "1":
-                connector = self._extract_connector(cell, mgm_root, shapes_dict)
+                connector, labels = self._extract_connector(cell, mgm_root, shapes_dict)
                 if connector:
                     try:
                         if connector.id is not None:
@@ -551,6 +551,11 @@ class DrawIOLoader:
                     except Exception:
                         pass
                     elements.append(connector)
+                    if labels:
+                        for label in labels:
+                            # Keep label above the connector line.
+                            label.z_index = connector.z_index
+                            elements.append(label)
         
         # Sort by Z-order
         elements.sort(key=lambda e: e.z_index)
@@ -636,19 +641,19 @@ class DrawIOLoader:
         
         return shape
     
-    def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> Optional[ConnectorElement]:
-        """Extract connector"""
+    def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> tuple[Optional[ConnectorElement], List[TextElement]]:
+        """Extract connector and its labels (if present)"""
         source_id = cell.attrib.get("source")
         target_id = cell.attrib.get("target")
         
         if not source_id or not target_id:
-            return None
+            return None, []
         
         source_shape = shapes_dict.get(source_id)
         target_shape = shapes_dict.get(target_id)
         
         if not source_shape or not target_shape:
-            return None
+            return None, []
         
         connector_id = cell.attrib.get("id")
         style_str = cell.attrib.get("style", "")
@@ -657,6 +662,8 @@ class DrawIOLoader:
         stroke_color = self.style_extractor.extract_stroke_color(cell)
         stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
         has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
+        font_color = self.style_extractor.extract_font_color(cell)
+        label_bg_color = self.style_extractor.extract_label_background_color(cell)
         
         # Edge style
         edge_style = "straight"
@@ -688,6 +695,7 @@ class DrawIOLoader:
         # Extract points (execute first for automatic port determination)
         geo = cell.find(".//mxGeometry")
         points_raw = []
+        points_for_ports = []
         if geo is not None:
             # Find Array[@as="points"] (drawio's waypoints are stored here)
             array_elem = geo.find('./Array[@as="points"]')
@@ -697,6 +705,7 @@ class DrawIOLoader:
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
                     points_raw.append((px, py))
+                    points_for_ports.append((px, py))
             else:
                 # If Array is not present, find mxPoint as direct child of mxGeometry
                 # Note: mxPoint with as="offset" are label offsets, not waypoints.
@@ -706,6 +715,9 @@ class DrawIOLoader:
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
                     points_raw.append((px, py))
+                    if (point_elem.attrib.get("as") or "").strip() != "offset":
+                        # Only use non-offset points for port inference.
+                        points_for_ports.append((px, py))
 
         def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
             """
@@ -832,6 +844,31 @@ class DrawIOLoader:
             tx_c = target_shape_.x + target_shape_.w / 2.0
             ty_c = target_shape_.y + target_shape_.h / 2.0
 
+            # If centers are aligned horizontally/vertically, use straight ports.
+            # This avoids ambiguous HV/VH tie-breaking that can land on the wrong side.
+            dx_c = tx_c - sx_c
+            dy_c = ty_c - sy_c
+            eps_center = 1e-6
+            if abs(dy_c) <= eps_center:
+                # Horizontal alignment: exit right/left, entry left/right.
+                exit_x = 1.0 if dx_c >= 0 else 0.0
+                exit_y = 0.5
+                entry_x = 0.0 if dx_c >= 0 else 1.0
+                entry_y = 0.5
+                p1 = self._calculate_boundary_point(source_shape_, exit_x, exit_y, exit_dx_, exit_dy_)
+                p2 = self._calculate_boundary_point(target_shape_, entry_x, entry_y, entry_dx_, entry_dy_)
+                return [p1, p2]
+
+            if abs(dx_c) <= eps_center:
+                # Vertical alignment: exit bottom/top, entry top/bottom.
+                exit_x = 0.5
+                exit_y = 1.0 if dy_c >= 0 else 0.0
+                entry_x = 0.5
+                entry_y = 0.0 if dy_c >= 0 else 1.0
+                p1 = self._calculate_boundary_point(source_shape_, exit_x, exit_y, exit_dx_, exit_dy_)
+                p2 = self._calculate_boundary_point(target_shape_, entry_x, entry_y, entry_dx_, entry_dy_)
+                return [p1, p2]
+
             # Candidate A: HV (exit left/right, entry top/bottom)
             exit_a_x = 1.0 if tx_c >= sx_c else 0.0
             exit_a_y = 0.5
@@ -891,10 +928,12 @@ class DrawIOLoader:
         else:
             if edge_style == "orthogonal":
                 auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
-                    source_shape, target_shape, points_raw
+                    source_shape, target_shape, points_for_ports
                 )
             else:
-                auto_exit_x = auto_exit_y = auto_entry_x = auto_entry_y = 0.5
+                auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
+                    source_shape, target_shape, points_for_ports
+                )
 
             exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
             exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
@@ -903,7 +942,7 @@ class DrawIOLoader:
 
             # For orthogonal edges with waypoints, prefer the side implied by the first/last waypoint
             # when the declared port contradicts it.
-            if edge_style == "orthogonal" and points_raw:
+            if edge_style == "orthogonal" and points_for_ports:
                 declared_exit_side = _infer_port_side(exit_x, exit_y)
                 implied_exit_side = _infer_port_side(auto_exit_x, auto_exit_y)
                 if implied_exit_side and declared_exit_side != implied_exit_side:
@@ -982,8 +1021,267 @@ class DrawIOLoader:
             style=style,
             z_index=0  # TODO: extract z-index
         )
-        
-        return connector
+
+        # Extract label text (edge value)
+        labels: List[TextElement] = []
+
+        label_element = self._extract_connector_label(cell, connector, font_color, label_bg_color, style_str)
+        if label_element is not None:
+            labels.append(label_element)
+
+        # Edge labels can also be stored as child mxCell nodes (edgeLabel style).
+        if connector_id and mgm_root is not None:
+            try:
+                child_cells = mgm_root.findall(f".//mxCell[@parent='{connector_id}']")
+            except Exception:
+                child_cells = []
+            for label_cell in child_cells:
+                if label_cell.attrib.get("vertex") != "1":
+                    continue
+                style_val = label_cell.attrib.get("style", "") or ""
+                if "edgeLabel" not in style_val:
+                    continue
+                child_label = self._extract_edge_label_cell(
+                    label_cell=label_cell,
+                    connector=connector,
+                    default_font_color=font_color,
+                    default_label_bg_color=label_bg_color,
+                )
+                if child_label is not None:
+                    labels.append(child_label)
+
+        return connector, labels
+
+    def _extract_connector_label(
+        self,
+        cell: ET.Element,
+        connector: ConnectorElement,
+        font_color: Optional[RGBColor],
+        label_bg_color: Optional[RGBColor],
+        style_str: str,
+    ) -> Optional[TextElement]:
+        """Extract edge label as a standalone text element."""
+        text_raw = cell.attrib.get("value", "") or ""
+        if not text_raw.strip():
+            return None
+
+        text_paragraphs = self._extract_text(text_raw, font_color, style_str)
+        if not text_paragraphs:
+            return None
+
+        label_x, label_y = self._calculate_connector_label_position(cell, connector.points, connector.edge_style)
+        label_w, label_h = self._estimate_text_box_size(text_paragraphs)
+
+        return TextElement(
+            x=label_x - label_w / 2.0,
+            y=label_y - label_h / 2.0,
+            w=label_w,
+            h=label_h,
+            text=text_paragraphs,
+            style=Style(
+                label_background_color=label_bg_color,
+                word_wrap=False,
+            ),
+        )
+
+    def _extract_edge_label_cell(
+        self,
+        label_cell: ET.Element,
+        connector: ConnectorElement,
+        default_font_color: Optional[RGBColor],
+        default_label_bg_color: Optional[RGBColor],
+    ) -> Optional[TextElement]:
+        """Extract edge label from a child mxCell (edgeLabel style)."""
+        text_raw = label_cell.attrib.get("value", "") or ""
+        if not text_raw.strip():
+            return None
+
+        label_style_str = label_cell.attrib.get("style", "") or ""
+        label_font_color = self.style_extractor.extract_font_color(label_cell) or default_font_color
+        label_bg_color = self.style_extractor.extract_label_background_color(label_cell) or default_label_bg_color
+
+        text_paragraphs = self._extract_text(text_raw, label_font_color, label_style_str)
+        if not text_paragraphs:
+            return None
+
+        label_x, label_y = self._calculate_connector_label_position(label_cell, connector.points, connector.edge_style)
+        label_w, label_h = self._estimate_text_box_size(text_paragraphs)
+
+        return TextElement(
+            x=label_x - label_w / 2.0,
+            y=label_y - label_h / 2.0,
+            w=label_w,
+            h=label_h,
+            text=text_paragraphs,
+            style=Style(
+                label_background_color=label_bg_color,
+                word_wrap=False,
+            ),
+        )
+
+    def _calculate_connector_label_position(
+        self,
+        cell: ET.Element,
+        points: List[tuple],
+        edge_style: str,
+    ) -> tuple:
+        """Return label anchor position (px) for a connector."""
+        if not points or len(points) < 2:
+            return (0.0, 0.0)
+
+        # Midpoint along the polyline length.
+        def _dist(a: tuple, b: tuple) -> float:
+            dx = b[0] - a[0]
+            dy = b[1] - a[1]
+            return (dx * dx + dy * dy) ** 0.5
+
+        total_len = 0.0
+        seg_lengths: List[float] = []
+        for i in range(len(points) - 1):
+            seg_len = _dist(points[i], points[i + 1])
+            seg_lengths.append(seg_len)
+            total_len += seg_len
+
+        if total_len <= 1e-6:
+            sx, sy = points[0]
+            tx, ty = points[-1]
+            base_x, base_y = (sx + tx) / 2.0, (sy + ty) / 2.0
+            seg_dx, seg_dy = (tx - sx), (ty - sy)
+        else:
+            rel_pos, rel_offset, abs_offset = self._extract_edge_label_geometry(cell)
+            t_rel = min(max(rel_pos, 0.0), 1.0)
+            target_len = total_len * t_rel
+            acc = 0.0
+            base_x, base_y = points[0]
+            seg_dx, seg_dy = (points[1][0] - points[0][0]), (points[1][1] - points[0][1])
+            for i in range(len(points) - 1):
+                seg_len = seg_lengths[i]
+                if acc + seg_len >= target_len:
+                    t = (target_len - acc) / max(seg_len, 1e-6)
+                    base_x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
+                    base_y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
+                    seg_dx = points[i + 1][0] - points[i][0]
+                    seg_dy = points[i + 1][1] - points[i][1]
+                    break
+                acc += seg_len
+
+        # Apply relative offset (perpendicular to local segment) + absolute offset (screen space)
+        rel_pos, rel_offset, abs_offset = self._extract_edge_label_geometry(cell)
+        rel_x, rel_y = rel_offset
+        abs_x, abs_y = abs_offset
+
+        # Normal direction
+        if edge_style == "orthogonal" and abs(seg_dx) + abs(seg_dy) > 1e-6:
+            if abs(seg_dx) >= abs(seg_dy):
+                # Horizontal segment: offset in Y (draw.io positive is upward for labels).
+                n_x, n_y = 0.0, -1.0
+            else:
+                # Vertical segment: offset in X.
+                n_x, n_y = 1.0, 0.0
+        else:
+            seg_len = (seg_dx * seg_dx + seg_dy * seg_dy) ** 0.5
+            if seg_len <= 1e-6:
+                n_x, n_y = 0.0, 1.0
+            else:
+                # Counter-clockwise normal.
+                n_x = -seg_dy / seg_len
+                n_y = seg_dx / seg_len
+
+        pos_x = base_x + n_x * rel_y + abs_x
+        pos_y = base_y + n_y * rel_y + abs_y
+
+        # If geometry has non-relative x/y, treat them as absolute offsets in screen space.
+        if not self._edge_label_is_relative(cell):
+            pos_x += rel_x
+            pos_y += rel_y
+
+        return (pos_x, pos_y)
+
+    def _edge_label_is_relative(self, cell: ET.Element) -> bool:
+        geo = cell.find(".//mxGeometry")
+        if geo is None:
+            return False
+        return (geo.attrib.get("relative") or "").strip() == "1"
+
+    def _extract_edge_label_geometry(self, cell: ET.Element) -> tuple:
+        """Extract edge label geometry (relative position, relative offset, absolute offset)."""
+        geo = cell.find(".//mxGeometry")
+        rel_pos = 0.5
+        rel_x = 0.0
+        rel_y = 0.0
+        abs_x = 0.0
+        abs_y = 0.0
+        has_rel_x = False
+
+        if geo is not None:
+            if "x" in geo.attrib:
+                try:
+                    rel_x = float(geo.attrib.get("x", "0") or 0)
+                    has_rel_x = True
+                except ValueError:
+                    rel_x = 0.0
+            if "y" in geo.attrib:
+                try:
+                    rel_y = float(geo.attrib.get("y", "0") or 0)
+                except ValueError:
+                    rel_y = 0.0
+
+            # For relative geometries, x is a position along the edge.
+            # mxGraph uses -1..1 where 0 is center, -1 is source, +1 is target.
+            # Some exports may store values outside that range; fall back to treating
+            # them as offsets from the center.
+            if (geo.attrib.get("relative") or "").strip() == "1":
+                if has_rel_x:
+                    if -1.0 <= rel_x <= 1.0:
+                        rel_pos = 0.5 + (rel_x / 2.0)
+                    else:
+                        rel_pos = 0.5 + rel_x
+                else:
+                    rel_pos = 0.5
+
+            offset_point = geo.find('./mxPoint[@as="offset"]')
+            if offset_point is not None:
+                try:
+                    if offset_point.attrib.get("x") is not None:
+                        abs_x = float(offset_point.attrib.get("x") or 0)
+                except ValueError:
+                    pass
+                try:
+                    if offset_point.attrib.get("y") is not None:
+                        abs_y = float(offset_point.attrib.get("y") or 0)
+                except ValueError:
+                    pass
+
+        return (rel_pos, (rel_x, rel_y), (abs_x, abs_y))
+
+    def _estimate_text_box_size(self, paragraphs: List[TextParagraph]) -> tuple:
+        """Estimate text box size (px) from text content and font size."""
+        if not paragraphs:
+            return (10.0, 10.0)
+
+        lines: List[str] = []
+        font_size = None
+        for para in paragraphs:
+            text = "".join(run.text for run in para.runs if run.text)
+            if text:
+                lines.extend(text.splitlines() or [text])
+            if font_size is None:
+                for run in para.runs:
+                    if run.font_size:
+                        font_size = run.font_size
+                        break
+
+        if not lines:
+            lines = [""]
+        if font_size is None:
+            font_size = 12.0
+
+        max_len = max(len(line) for line in lines)
+        avg_char_px = float(font_size) * 0.6
+        padding = float(font_size) * 0.6
+        width = max(max_len * avg_char_px + padding, float(font_size) * 1.5)
+        height = max(len(lines) * float(font_size) * 1.4, float(font_size) * 1.2)
+        return (width, height)
     
     def _calculate_boundary_point(self, shape: ShapeElement, rel_x: float, rel_y: float, offset_x: float, offset_y: float) -> tuple:
         """
