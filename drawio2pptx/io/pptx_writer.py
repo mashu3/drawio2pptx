@@ -103,6 +103,12 @@ class PPTXWriter:
         # Map shape type
         pptx_shape_type = map_shape_type_to_pptx(shape.shape_type)
         
+        # For rectangles with corner radius, use ROUNDED_RECTANGLE
+        if (pptx_shape_type == MSO_SHAPE.RECTANGLE and 
+            shape.style.corner_radius is not None and 
+            shape.style.corner_radius > 0):
+            pptx_shape_type = MSO_SHAPE.ROUNDED_RECTANGLE
+        
         # Create shape
         left = px_to_emu(shape.x)
         top = px_to_emu(shape.y)
