@@ -371,6 +371,8 @@ class StyleExtractor:
         shape_type = self.extract_style_value(style, "shape")
         if shape_type:
             shape_type = shape_type.lower()
+            if shape_type == "swimlane":
+                return "swimlane"
             # draw.io flowchart: "Predefined process" is often represented as shape=process with backgroundOutline=1.
             # Map it to a dedicated pseudo-type so we can use PowerPoint's predefined-process shape.
             if shape_type == "process":
@@ -391,6 +393,8 @@ class StyleExtractor:
         if style:
             parts = style.split(";")
             first_part = (parts[0].strip().lower() if parts else "")
+            if first_part == "swimlane":
+                return "swimlane"
             # Use dictionary mapping
             normalized = self._SHAPE_TYPE_MAP.get(first_part)
             if normalized:
@@ -570,6 +574,68 @@ class DrawIOLoader:
         
         return elements
     
+    def _get_parent_coordinates(self, parent_id: str, mgm_root: ET.Element) -> tuple[float, float]:
+        """
+        Get parent element's coordinates recursively
+        
+        Args:
+            parent_id: Parent element ID
+            mgm_root: mxGraphModel root element
+        
+        Returns:
+            (parent_x, parent_y) tuple (accumulated coordinates from all ancestors)
+        """
+        if not parent_id or parent_id in ("0", "1"):
+            # Root elements (0 or 1) have no coordinates
+            return (0.0, 0.0)
+        
+        # Find parent cell
+        parent_cell = None
+        for cell in mgm_root.findall(".//mxCell"):
+            if cell.attrib.get("id") == parent_id:
+                parent_cell = cell
+                break
+        
+        if parent_cell is None:
+            return (0.0, 0.0)
+        
+        # Get parent's geometry
+        parent_geo = parent_cell.find(".//mxGeometry")
+        if parent_geo is None:
+            return (0.0, 0.0)
+        
+        try:
+            parent_x = float(parent_geo.attrib.get("x", "0") or 0)
+            parent_y = float(parent_geo.attrib.get("y", "0") or 0)
+        except ValueError:
+            return (0.0, 0.0)
+        
+        # For swimlane parents, add startSize offset to account for header area.
+        # In draw.io, child elements' coordinates are relative to the content area (excluding header).
+        parent_style = parent_cell.attrib.get("style", "")
+        if parent_style and "swimlane" in parent_style:
+            # Extract startSize (header size)
+            start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0)
+            if start_size is None:
+                start_size = 0.0
+            
+            # Extract horizontal attribute (0 = vertical swimlane with left header, 1 = horizontal with top header)
+            horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
+            is_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
+            
+            if is_horizontal:
+                # Horizontal swimlane: header on top
+                parent_y += start_size
+        
+        # Recursively get grandparent coordinates
+        grandparent_id = parent_cell.attrib.get("parent")
+        if grandparent_id:
+            grandparent_x, grandparent_y = self._get_parent_coordinates(grandparent_id, mgm_root)
+            parent_x += grandparent_x
+            parent_y += grandparent_y
+        
+        return (parent_x, parent_y)
+    
     def _extract_shape(self, cell: ET.Element, mgm_root: ET.Element) -> Optional[ShapeElement]:
         """Extract shape"""
         geo = cell.find(".//mxGeometry")
@@ -583,6 +649,13 @@ class DrawIOLoader:
             h = float(geo.attrib.get("height", "0") or 0)
         except ValueError:
             return None
+        
+        # Add parent coordinates if parent exists
+        parent_id = cell.attrib.get("parent")
+        if parent_id and parent_id not in ("0", "1"):
+            parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
+            x += parent_x
+            y += parent_y
         
         # Basic information
         shape_id = cell.attrib.get("id")
@@ -633,6 +706,23 @@ class DrawIOLoader:
             has_shadow=has_shadow,
             word_wrap=word_wrap
         )
+
+        # Swimlane/container metadata (used for header layout in PPTX)
+        try:
+            if shape_type and shape_type.lower() == "swimlane":
+                style.is_swimlane = True
+                start_size = self.style_extractor.extract_style_float(style_str, "startSize", 0.0)
+                style.swimlane_start_size = float(start_size or 0.0)
+                horizontal_str = self.style_extractor.extract_style_value(style_str, "horizontal")
+                style.swimlane_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
+                swimlane_line_str = self.style_extractor.extract_style_value(style_str, "swimlaneLine")
+                if swimlane_line_str is None:
+                    style.swimlane_line = True
+                else:
+                    style.swimlane_line = swimlane_line_str.strip() != "0"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to extract swimlane metadata: {e}")
         
         # Create ShapeElement
         shape = ShapeElement(
@@ -705,6 +795,7 @@ class DrawIOLoader:
         geo = cell.find(".//mxGeometry")
         points_raw = []
         points_for_ports = []
+        points_raw_offset_flags = []
         if geo is not None:
             # Find Array[@as="points"] (drawio's waypoints are stored here)
             array_elem = geo.find('./Array[@as="points"]')
@@ -715,6 +806,7 @@ class DrawIOLoader:
                     py = float(point_elem.attrib.get("y", "0") or 0)
                     points_raw.append((px, py))
                     points_for_ports.append((px, py))
+                    points_raw_offset_flags.append(False)
             else:
                 # If Array is not present, find mxPoint as direct child of mxGeometry
                 # Note: mxPoint with as="offset" are label offsets, not waypoints.
@@ -723,10 +815,26 @@ class DrawIOLoader:
                 for point_elem in geo.findall("./mxPoint"):
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
+                    is_offset = (point_elem.attrib.get("as") or "").strip() == "offset"
                     points_raw.append((px, py))
-                    if (point_elem.attrib.get("as") or "").strip() != "offset":
+                    points_raw_offset_flags.append(is_offset)
+                    if not is_offset:
                         # Only use non-offset points for port inference.
                         points_for_ports.append((px, py))
+
+        # Waypoints are stored relative to the connector's parent. Align them to the
+        # same absolute coordinate space as shapes.
+        parent_id = cell.attrib.get("parent")
+        if parent_id and parent_id not in ("0", "1") and points_raw:
+            parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
+            points_for_ports = [(px + parent_x, py + parent_y) for px, py in points_for_ports]
+            if points_raw_offset_flags and len(points_raw_offset_flags) == len(points_raw):
+                points_raw = [
+                    (px + parent_x, py + parent_y) if not is_offset else (px, py)
+                    for (px, py), is_offset in zip(points_raw, points_raw_offset_flags)
+                ]
+            else:
+                points_raw = [(px + parent_x, py + parent_y) for px, py in points_raw]
 
         def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
             """
