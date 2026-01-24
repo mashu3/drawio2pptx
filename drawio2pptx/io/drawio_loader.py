@@ -779,6 +779,18 @@ class DrawIOLoader:
         end_fill = self.style_extractor.extract_style_value(style_str, "endFill") != "0"
         start_size = self.style_extractor.extract_style_float(style_str, "startSize", None)
         end_size = self.style_extractor.extract_style_float(style_str, "endSize", None)
+        
+        # Dash pattern
+        # draw.io uses dashed=1 for dashed lines, or dashed=<pattern> for specific patterns
+        dash_pattern = None
+        dashed_value = self.style_extractor.extract_style_value(style_str, "dashed")
+        if dashed_value:
+            if dashed_value == "1" or dashed_value == "true":
+                # Default dashed pattern
+                dash_pattern = "dashed"
+            else:
+                # Specific dash pattern (e.g., "dotted", "dashDot", etc.)
+                dash_pattern = dashed_value
 
         # draw.io can omit default arrow styles from the edge `style` string.
         # In diagrams.net, a newly created connector typically has an arrow at the target side by default.
@@ -1120,6 +1132,7 @@ class DrawIOLoader:
         style = Style(
             stroke=stroke_color,
             stroke_width=stroke_width,
+            dash=dash_pattern,
             arrow_start=start_arrow,
             arrow_end=end_arrow,
             arrow_start_fill=start_fill,

@@ -15,7 +15,7 @@ from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, Te
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
-from ..mapping.style_map import map_arrow_type, map_arrow_type_with_size
+from ..mapping.style_map import map_arrow_type, map_arrow_type_with_size, map_dash_pattern
 from ..logger import ConversionLogger
 from ..fonts import replace_font, DRAWIO_DEFAULT_FONT_FAMILY
 from ..config import PARALLELOGRAM_SKEW
@@ -434,6 +434,14 @@ class PPTXWriter:
             if self.logger:
                 self.logger.debug(f"Failed to disable connector fill: {e}")
         
+        # Set dash pattern
+        if connector.style.dash:
+            try:
+                self._set_dash_pattern_xml(line_shape, connector.style.dash)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector dash pattern: {e}")
+        
         if effective_start_arrow or effective_end_arrow:
             self._set_arrow_heads_xml(
                 line_shape,
@@ -604,6 +612,14 @@ class PPTXWriter:
                 except Exception as e:
                     if self.logger:
                         self.logger.debug(f"Failed to disable connector segment fill: {e}")
+                
+                # Set dash pattern
+                if connector.style.dash:
+                    try:
+                        self._set_dash_pattern_xml(conn_shape, connector.style.dash)
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to set connector segment dash pattern: {e}")
                 
                 # Arrows: start arrow on first segment, end arrow on last segment
                 is_first_segment = idx == 0
@@ -1359,6 +1375,45 @@ class PPTXWriter:
     def _set_edge_stroke_color_xml(self, shape, stroke_color: RGBColor):
         """Set edge stroke color via XML"""
         self._set_stroke_color_xml(shape, stroke_color)
+    
+    def _set_dash_pattern_xml(self, shape, dash_pattern: Optional[str]):
+        """Set dash pattern via XML
+        
+        Args:
+            shape: PowerPoint shape object
+            dash_pattern: draw.io dash pattern name (e.g., "dashed", "dotted", "dashDot")
+        """
+        try:
+            if not hasattr(shape, '_element'):
+                return
+            
+            if not dash_pattern:
+                return
+            
+            # Map draw.io dash pattern to PowerPoint prstDash value
+            prst_dash = map_dash_pattern(dash_pattern)
+            if not prst_dash or prst_dash == "solid":
+                return
+            
+            shape_element = shape._element
+            ln_element = shape_element.find(f'.//a:ln', namespaces=NSMAP_DRAWINGML)
+            if ln_element is None:
+                sp_pr = shape_element.find('.//a:spPr', namespaces=NSMAP_DRAWINGML)
+                if sp_pr is not None:
+                    ln_element = ET.SubElement(sp_pr, _a('ln'))
+                else:
+                    return
+            
+            # Remove existing prstDash
+            for prst_dash_elem in ln_element.findall('.//a:prstDash', namespaces=NSMAP_DRAWINGML):
+                ln_element.remove(prst_dash_elem)
+            
+            # Add new prstDash
+            prst_dash_elem = ET.SubElement(ln_element, _a('prstDash'))
+            prst_dash_elem.set('val', prst_dash)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set dash pattern XML: {e}")
     
     def _set_arrow_heads_xml(
         self,
