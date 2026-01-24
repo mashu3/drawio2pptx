@@ -1,7 +1,9 @@
 # drawio2pptx
 [![License: MIT](https://img.shields.io/pypi/l/drawio2pptx)](https://opensource.org/licenses/MIT)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/drawio2pptx)](https://pypi.org/project/drawio2pptx)
+[![GitHub Release](https://img.shields.io/github/release/mashu3/drawio2pptx?color=orange)](https://github.com/mashu3/drawio2pptx/releases)
 [![PyPi Version](https://img.shields.io/pypi/v/drawio2pptx?color=yellow)](https://pypi.org/project/drawio2pptx/)
+[![Downloads](https://static.pepy.tech/badge/drawio2pptx)](https://pepy.tech/project/drawio2pptx)
 
 **Convert your draw.io diagrams to PowerPoint presentations!** 🎨➡️📊
 
