@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 from lxml import etree as ET
 from lxml import html as lxml_html
+from drawio2pptx.io.drawio_loader import ColorParser
 
 
 def parse_color(color_str):
@@ -12,31 +13,19 @@ def parse_color(color_str):
     if not color_str:
         return "None"
     
-    color_str = color_str.strip()
-    
-    # Hexadecimal format (#RRGGBB or #RGB)
-    import re
-    hex_match = re.match(r'^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$', color_str)
-    if hex_match:
-        hex_val = hex_match.group(1)
-        if len(hex_val) == 3:
-            # Expand short form (#RGB) to (#RRGGBB)
-            r = int(hex_val[0] * 2, 16)
-            g = int(hex_val[1] * 2, 16)
-            b = int(hex_val[2] * 2, 16)
+    # Use ColorParser to parse color
+    rgb_color = ColorParser.parse(color_str)
+    if rgb_color:
+        # RGBColor has tuple-like structure, accessible by index
+        r, g, b = rgb_color[0], rgb_color[1], rgb_color[2]
+        
+        # For hexadecimal format, preserve original format if short form
+        if color_str.startswith('#'):
+            # Use original string for hex format
+            return f"RGB({r}, {g}, {b}) / #{color_str[1:]}"
         else:
-            r = int(hex_val[0:2], 16)
-            g = int(hex_val[2:4], 16)
-            b = int(hex_val[4:6], 16)
-        return f"RGB({r}, {g}, {b}) / #{color_str[1:]}"
-    
-    # rgb(r, g, b) format
-    rgb_match = re.match(r'^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$', color_str)
-    if rgb_match:
-        r = int(rgb_match.group(1))
-        g = int(rgb_match.group(2))
-        b = int(rgb_match.group(3))
-        return f"RGB({r}, {g}, {b})"
+            # For rgb format, don't include hex
+            return f"RGB({r}, {g}, {b})"
     
     return color_str
 

@@ -8,6 +8,7 @@ from typing import List, Optional
 from lxml import html as lxml_html
 from ..model.intermediate import TextParagraph, TextRun
 from pptx.dml.color import RGBColor
+from ..io.drawio_loader import ColorParser
 
 
 def html_to_paragraphs(html_text: str, default_font_color: RGBColor = None,
@@ -176,7 +177,7 @@ def _create_run_from_element(elem, text: str, default_font_color: RGBColor = Non
         # color attribute
         color_attr = elem.get('color')
         if color_attr:
-            font_color = _parse_color(color_attr)
+            font_color = ColorParser.parse(color_attr)
     
     # Extract font information from style attribute
     style_attr = elem.get('style', '')
@@ -197,7 +198,7 @@ def _create_run_from_element(elem, text: str, default_font_color: RGBColor = Non
         color_match = re.search(r'color:\s*([^;]+)', style_attr)
         if color_match:
             color_value = color_match.group(1).strip()
-            parsed_color = _parse_color(color_value)
+            parsed_color = ColorParser.parse(color_value)
             if parsed_color:
                 font_color = parsed_color
         
@@ -249,66 +250,6 @@ def _create_run_from_element(elem, text: str, default_font_color: RGBColor = Non
         italic=italic,
         underline=underline
     )
-
-
-def _parse_color(color_str: str) -> Optional[RGBColor]:
-    """Convert color string to RGBColor"""
-    if not color_str:
-        return None
-    
-    color_str = color_str.strip()
-    
-    # Process light-dark(color1,color2) format (use light mode color)
-    light_dark_match = re.match(r'^light-dark\s*\((.*)\)$', color_str)
-    if light_dark_match:
-        inner = light_dark_match.group(1)
-        # Split by comma (ignore commas inside parentheses)
-        parts = []
-        depth = 0
-        start = 0
-        for i, char in enumerate(inner):
-            if char == '(':
-                depth += 1
-            elif char == ')':
-                depth -= 1
-            elif char == ',' and depth == 0:
-                parts.append(inner[start:i].strip())
-                start = i + 1
-        parts.append(inner[start:].strip())
-        
-        if len(parts) >= 1:
-            # Use light mode color (first argument)
-            light_color = parts[0]
-            return _parse_color(light_color)
-    
-    # Return None if "none"
-    if color_str.lower() == "none":
-        return None
-    
-    # Hexadecimal format (#RRGGBB or #RGB)
-    hex_match = re.match(r'^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$', color_str)
-    if hex_match:
-        hex_val = hex_match.group(1)
-        if len(hex_val) == 3:
-            # Expand short form (#RGB)
-            r = int(hex_val[0] * 2, 16)
-            g = int(hex_val[1] * 2, 16)
-            b = int(hex_val[2] * 2, 16)
-        else:
-            r = int(hex_val[0:2], 16)
-            g = int(hex_val[2:4], 16)
-            b = int(hex_val[4:6], 16)
-        return RGBColor(r, g, b)
-    
-    # rgb(r, g, b) format
-    rgb_match = re.match(r'^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$', color_str)
-    if rgb_match:
-        r = int(rgb_match.group(1))
-        g = int(rgb_match.group(2))
-        b = int(rgb_match.group(3))
-        return RGBColor(r, g, b)
-    
-    return None
 
 
 def _parse_font_size(size_str: str) -> Optional[float]:
