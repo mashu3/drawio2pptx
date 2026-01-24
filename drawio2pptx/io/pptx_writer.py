@@ -72,8 +72,9 @@ class PPTXWriter:
             try:
                 prs.slide_width = px_to_emu(page_size[0])
                 prs.slide_height = px_to_emu(page_size[1])
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set slide size: {e}")
         
         return prs, blank_layout
     
@@ -126,16 +127,18 @@ class PPTXWriter:
         try:
             if shape.id:
                 shp.name = f"drawio2pptx:shape:{shape.id}"
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set shape name: {e}")
 
         # For parallelograms, explicitly set the skew (adjust) to match connection point calculation with appearance
         try:
             if shape.shape_type and "parallelogram" in shape.shape_type.lower():
                 if hasattr(shp, "adjustments") and len(shp.adjustments) > 0:
                     shp.adjustments[0] = float(PARALLELOGRAM_SKEW)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set parallelogram adjustments: {e}")
         
         # Set text
         if shape.text:
@@ -154,13 +157,15 @@ class PPTXWriter:
             try:
                 shp.fill.solid()
                 shp.fill.fore_color.rgb = fill_color
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set fill color: {e}")
         else:
             try:
                 shp.fill.background()
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set background fill: {e}")
 
         # Gradient fill (draw.io: gradientColor/gradientDirection)
         # Apply after the base fill so we can safely override the fill XML.
@@ -174,8 +179,9 @@ class PPTXWriter:
                     gradient_color=grad_color,
                     gradient_direction=grad_dir,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set gradient fill: {e}")
         
         # Set stroke
         # Use black as default if stroke is None
@@ -183,14 +189,16 @@ class PPTXWriter:
         try:
             shp.line.fill.solid()
             self._set_stroke_color_xml(shp, stroke_color)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set stroke color: {e}")
         
         if shape.style.stroke_width > 0:
             try:
                 shp.line.width = px_to_pt(shape.style.stroke_width)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set stroke width: {e}")
         
         # Shadow settings (similar to legacy: disable shadow when has_shadow is False)
         try:
@@ -279,8 +287,9 @@ class PPTXWriter:
         try:
             if connector.id:
                 line_shape.name = f"drawio2pptx:connector:{connector.id}"
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set connector name: {e}")
         
         # Set stroke
         # Use black as default if stroke is None
@@ -288,20 +297,23 @@ class PPTXWriter:
         try:
             line_shape.line.fill.solid()
             self._set_edge_stroke_color_xml(line_shape, stroke_color)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set connector stroke color: {e}")
         
         if connector.style.stroke_width > 0:
             try:
                 line_shape.line.width = px_to_pt(connector.style.stroke_width)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector stroke width: {e}")
         
         # Disable fill
         try:
             line_shape.fill.background()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to disable connector fill: {e}")
         
         if effective_start_arrow or effective_end_arrow:
             self._set_arrow_heads_xml(
@@ -364,18 +376,21 @@ class PPTXWriter:
         try:
             if text_element.id:
                 tb.name = f"drawio2pptx:text:{text_element.id}"
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set text box name: {e}")
 
         # Make the text box background transparent.
         try:
             tb.fill.background()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set text box fill background: {e}")
         try:
             tb.line.fill.background()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set text box line background: {e}")
 
         if text_element.text:
             self._set_text_frame(
@@ -443,8 +458,9 @@ class PPTXWriter:
                 try:
                     if connector.id:
                         conn_shape.name = f"drawio2pptx:connector:{connector.id}:seg:{idx}"
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to set connector segment name: {e}")
                 
                 # Set stroke
                 # Use black as default if stroke is None
@@ -452,20 +468,23 @@ class PPTXWriter:
                 try:
                     conn_shape.line.fill.solid()
                     self._set_edge_stroke_color_xml(conn_shape, stroke_color)
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to set connector segment stroke color: {e}")
                 
                 if connector.style.stroke_width > 0:
                     try:
                         conn_shape.line.width = px_to_pt(connector.style.stroke_width)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to set connector segment stroke width: {e}")
                 
                 # Disable fill
                 try:
                     conn_shape.fill.background()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to disable connector segment fill: {e}")
                 
                 # Arrows: start arrow on first segment, end arrow on last segment
                 is_first_segment = idx == 0
@@ -590,18 +609,21 @@ class PPTXWriter:
             marker = slide.shapes.add_shape(MSO_SHAPE.OVAL, left, top, width, height)
             try:
                 marker.name = marker_name
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set marker name: {e}")
 
             # No fill (hollow marker).
             try:
                 marker.fill.background()
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set marker fill background: {e}")
             try:
                 self._set_no_fill_xml(marker)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set marker no fill XML: {e}")
 
             # Stroke matches connector.
             # Use black as default if stroke_color is None
@@ -609,21 +631,24 @@ class PPTXWriter:
             try:
                 marker.line.fill.solid()
                 self._set_stroke_color_xml(marker, effective_stroke_color)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set marker stroke color: {e}")
 
             try:
                 if stroke_width_px and stroke_width_px > 0:
                     marker.line.width = px_to_pt(stroke_width_px)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set marker stroke width: {e}")
 
             # Markers should not add extra visual effects.
             try:
                 marker.shadow.inherit = False
                 self._disable_shadow_xml(marker)
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to disable marker shadow: {e}")
         except Exception:
             return None
 
@@ -727,8 +752,9 @@ class PPTXWriter:
                 for elem in sp_pr.findall(f".//a:{tag}", namespaces=NSMAP_DRAWINGML):
                     try:
                         sp_pr.remove(elem)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to remove fill element {tag}: {e}")
 
             ET.SubElement(sp_pr, _a("noFill"))
         except Exception:
@@ -878,8 +904,9 @@ class PPTXWriter:
                 # 'square' enables wrapping, 'none' disables it
                 wrap_value = 'square' if word_wrap else 'none'
                 body_pr.set('wrap', wrap_value)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set vertical anchor XML: {e}")
     
     def _set_font_color_xml(self, run, font_color: RGBColor):
         """Set font color via XML (similar to legacy _set_font_color)"""
@@ -921,10 +948,12 @@ class PPTXWriter:
                     srgb = ET.SubElement(solid_fill, _a('srgbClr'))
                     val = f"{font_color[0]:02X}{font_color[1]:02X}{font_color[2]:02X}"
                     srgb.set('val', val)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set font color XML: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to access run element for font color: {e}")
 
     def _set_highlight_color_xml(self, run, highlight_color: RGBColor) -> None:
         """Set highlight color via XML"""
@@ -943,8 +972,9 @@ class PPTXWriter:
             for hi in r_pr.findall(".//a:highlight", namespaces=NSMAP_DRAWINGML):
                 try:
                     r_pr.remove(hi)
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to remove highlight element: {e}")
 
             # Important: DrawingML elements are order-sensitive in many Office apps.
             # Insert <a:highlight> before font elements (<a:latin>/<a:ea>/<a:cs>) when present,
@@ -1007,8 +1037,9 @@ class PPTXWriter:
             # Add srgbClr element with white color (RGB: 255, 255, 255)
             srgb_clr = ET.SubElement(solid_fill, _a('srgbClr'))
             srgb_clr.set('val', 'FFFFFF')
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set default fill XML: {e}")
 
     def _set_linear_gradient_fill_xml(
         self,
@@ -1074,8 +1105,9 @@ class PPTXWriter:
                 for elem in sp_pr.findall(f".//a:{tag}", namespaces=NSMAP_DRAWINGML):
                     try:
                         sp_pr.remove(elem)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to remove gradient fill element {tag}: {e}")
 
             grad_fill = ET.SubElement(sp_pr, _a("gradFill"))
             grad_fill.set("rotWithShape", "1")
@@ -1158,8 +1190,9 @@ class PPTXWriter:
             srgb = ET.SubElement(solid_fill, _a('srgbClr'))
             val = f"{stroke_color[0]:02X}{stroke_color[1]:02X}{stroke_color[2]:02X}"
             srgb.set('val', val)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set stroke color XML: {e}")
     
     def _set_edge_stroke_color_xml(self, shape, stroke_color: RGBColor):
         """Set edge stroke color via XML"""
@@ -1221,8 +1254,9 @@ class PPTXWriter:
                     tail_end.set('type', arrow_type)
                     tail_end.set('w', arrow_w)
                     tail_end.set('len', arrow_len)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set arrow XML: {e}")
     
     def _disable_shadow_xml(self, shape):
         """Disable shadow via XML (similar to legacy _disable_shadow_xml)"""
@@ -1247,5 +1281,6 @@ class PPTXWriter:
                 sp_pr.remove(shadow_elem)
             for shadow_elem in sp_pr.findall('.//a:innerShdw', namespaces=NSMAP_DRAWINGML):
                 sp_pr.remove(shadow_elem)
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to disable shadow XML: {e}")

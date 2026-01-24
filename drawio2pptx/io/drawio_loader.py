@@ -122,12 +122,14 @@ class StyleExtractor:
         2: 'underline',
     }
     
-    def __init__(self, color_parser: Optional[ColorParser] = None):
+    def __init__(self, color_parser: Optional[ColorParser] = None, logger: Optional[ConversionLogger] = None):
         """
         Args:
             color_parser: ColorParser instance (creates new one if None)
+            logger: ConversionLogger instance (optional)
         """
         self.color_parser = color_parser or ColorParser()
+        self.logger = logger
     
     def extract_style_value(self, style_str: str, key: str) -> Optional[str]:
         """Extract value for specified key from style string"""
@@ -212,8 +214,9 @@ class StyleExtractor:
         try:
             if cell.attrib.get("vertex") == "1" and cell.attrib.get("edge") != "1":
                 return "default"
-        except Exception:
-            pass
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to check vertex attribute: {e}")
 
         return None
 
@@ -316,8 +319,9 @@ class StyleExtractor:
                             parsed_color = self.color_parser.parse(color_value)
                             if parsed_color:
                                 return parsed_color
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to parse font color from HTML: {e}")
         
         return None
 
@@ -374,8 +378,9 @@ class StyleExtractor:
                     bg_outline = self.extract_style_value(style, "backgroundOutline")
                     if (bg_outline or "").strip() == "1":
                         return "predefinedprocess"
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to check backgroundOutline: {e}")
             # Use dictionary mapping
             normalized = self._SHAPE_TYPE_MAP.get(shape_type)
             if normalized:
@@ -407,7 +412,7 @@ class DrawIOLoader:
         """
         self.logger = logger
         self.color_parser = ColorParser()
-        self.style_extractor = StyleExtractor(self.color_parser)
+        self.style_extractor = StyleExtractor(self.color_parser, logger)
     
     def load_file(self, path: Path) -> List[ET.Element]:
         """
@@ -439,8 +444,9 @@ class DrawIOLoader:
                     wrapped = f"<div>{inner}</div>"
                     parsed = lxml_html.fromstring(wrapped)
                     inner = parsed.text_content()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to unescape HTML entities: {e}")
             
             # Parse as XML fragment
             if "<mxGraphModel" in inner or "<root" in inner or "<mxCell" in inner:
@@ -534,8 +540,9 @@ class DrawIOLoader:
                     try:
                         if shape.id is not None:
                             shape.z_index = cell_order.get(shape.id, 0)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to set z_index for shape {shape.id}: {e}")
                     elements.append(shape)
                     if shape.id:
                         shapes_dict[shape.id] = shape
@@ -548,8 +555,9 @@ class DrawIOLoader:
                     try:
                         if connector.id is not None:
                             connector.z_index = cell_order.get(connector.id, 0)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to set z_index for connector {connector.id}: {e}")
                     elements.append(connector)
                     if labels:
                         for label in labels:
@@ -689,8 +697,9 @@ class DrawIOLoader:
             try:
                 if mgm_root is not None and mgm_root.attrib.get("arrows") == "1":
                     end_arrow = "classic"
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to check arrows attribute: {e}")
         
         # Extract points (execute first for automatic port determination)
         geo = cell.find(".//mxGeometry")
@@ -994,9 +1003,10 @@ class DrawIOLoader:
                     entry_y if "entry_y" in locals() else None,
                     grid_size,
                 )
-            except Exception:
+            except Exception as e:
                 # Keep the original points on any unexpected failure.
-                pass
+                if self.logger:
+                    self.logger.debug(f"Failed to ensure orthogonal route respects ports: {e}")
         
         # Create style
         style = Style(
@@ -1554,8 +1564,9 @@ class DrawIOLoader:
                 paragraphs = self._extract_text_from_html(parsed, font_color, style_str)
                 if paragraphs:
                     return paragraphs
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to parse HTML text: {e}")
         
         # Process as plain text if HTML is not present or parsing fails
         plain_text = text_raw
@@ -1564,8 +1575,9 @@ class DrawIOLoader:
                 wrapped = f"<div>{plain_text}</div>"
                 parsed = lxml_html.fromstring(wrapped)
                 plain_text = parsed.text_content()
-            except Exception:
-                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to extract text content from HTML: {e}")
         
         if not plain_text:
             return []

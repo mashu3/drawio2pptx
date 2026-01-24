@@ -9,6 +9,7 @@ from lxml import html as lxml_html
 from ..model.intermediate import TextParagraph, TextRun
 from pptx.dml.color import RGBColor
 from ..io.drawio_loader import ColorParser
+from ..logger import get_logger
 
 
 def html_to_paragraphs(html_text: str, default_font_color: RGBColor = None,
@@ -60,8 +61,10 @@ def html_to_paragraphs(html_text: str, default_font_color: RGBColor = None,
                     paragraphs.append(TextParagraph(runs=runs))
         
         return paragraphs
-    except Exception:
+    except Exception as e:
         # Process as plain text if parsing fails
+        logger = get_logger()
+        logger.debug(f"Failed to parse HTML text, falling back to plain text: {e}")
         if html_text:
             runs = [TextRun(text=html_text, font_color=default_font_color,
                            font_family=default_font_family, font_size=default_font_size)]
@@ -173,6 +176,7 @@ def _create_run_from_element(elem, text: str, default_font_color: RGBColor = Non
                 size_map = {1: 8, 2: 10, 3: 12, 4: 14, 5: 18, 6: 24, 7: 36}
                 font_size = size_map.get(size_int, 12)
             except ValueError:
+                # Invalid size attribute, keep default
                 pass
         # color attribute
         color_attr = elem.get('color')
@@ -280,6 +284,7 @@ def _parse_font_size(size_str: str) -> Optional[float]:
     try:
         return float(size_str)
     except ValueError:
+        # Invalid numeric format, return None
         pass
     
     return None

@@ -106,8 +106,9 @@ def analyze_pptx_shape(shape):
                                     g = int(val[2:4], 16)
                                     b = int(val[4:6], 16)
                                     result['fill'] = f"RGB({r}, {g}, {b})"
-    except Exception:
-        pass
+    except Exception as e:
+        logger = get_logger()
+        logger.debug(f"Failed to extract fill color from XML: {e}")
     
     # Set to "None" if result is None
     if result['fill'] is None:
@@ -129,15 +130,17 @@ def analyze_pptx_shape(shape):
                             g = int(val[2:4], 16)
                             b = int(val[4:6], 16)
                             result['stroke_color'] = f"RGB({r}, {g}, {b})"
-    except Exception:
-        pass
+    except Exception as e:
+        logger = get_logger()
+        logger.debug(f"Failed to extract stroke color from XML: {e}")
     
     # Shadow
     try:
         if hasattr(shape, 'shadow'):
             result['has_shadow'] = shape.shadow.inherit
-    except Exception:
-        pass
+    except Exception as e:
+        logger = get_logger()
+        logger.debug(f"Failed to extract shadow information: {e}")
     
     # Text frame
     try:
@@ -172,8 +175,9 @@ def analyze_pptx_shape(shape):
                                             g = int(val[2:4], 16)
                                             b = int(val[4:6], 16)
                                             run_info['font_color'] = f"RGB({r}, {g}, {b})"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger = get_logger()
+                        logger.debug(f"Failed to extract font color from run XML: {e}")
                     
                     text_runs.append(run_info)
             
@@ -181,8 +185,9 @@ def analyze_pptx_shape(shape):
                 'vertical_anchor': str(tf.vertical_anchor),
                 'runs': text_runs,
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger = get_logger()
+        logger.debug(f"Failed to extract text frame information: {e}")
     
     return result
 
@@ -240,8 +245,9 @@ def compare_conversion(input_path: Path, output_path: Path):
         try:
             if hasattr(pptx_shape, 'auto_shape_type'):
                 pptx_auto_shape_type = pptx_shape.auto_shape_type
-        except Exception:
-            pass
+        except Exception as e:
+            logger = get_logger()
+            logger.debug(f"Failed to get auto_shape_type: {e}")
         
         auto_shape_info = f", auto_shape_type: {pptx_auto_shape_type}" if pptx_auto_shape_type else ""
         
