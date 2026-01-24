@@ -142,11 +142,47 @@ class PPTXWriter:
         
         # Set text
         if shape.text:
+            margin_overrides = None
+            text_direction = None
+            try:
+                if getattr(shape.style, "is_swimlane", False):
+                    start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+                    if start_size > 0:
+                        first_para = shape.text[0]
+                        base_top = first_para.spacing_top or 0.0
+                        base_left = first_para.spacing_left or 0.0
+                        base_bottom = first_para.spacing_bottom or 0.0
+                        base_right = first_para.spacing_right or 0.0
+
+                        if getattr(shape.style, "swimlane_horizontal", False):
+                            # Horizontal swimlane: header on the top
+                            margin_overrides = (
+                                base_top,
+                                base_left,
+                                max(shape.h - start_size + base_bottom, 0.0),
+                                base_right,
+                            )
+                        else:
+                            # Vertical swimlane: header on the left (vertical text)
+                            # Use vert270 to match draw.io's left header vertical text
+                            text_direction = "vert270"
+                            margin_overrides = (
+                                base_top,
+                                base_left,
+                                base_bottom,
+                                max(shape.w - start_size + base_right, 0.0),
+                            )
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to compute swimlane header margins: {e}")
+
             self._set_text_frame(
                 shp.text_frame,
                 shape.text,
                 default_highlight_color=shape.style.label_background_color,
                 word_wrap=shape.style.word_wrap,
+                margin_overrides_px=margin_overrides,
+                text_direction=text_direction,
             )
         
         # Set fill
@@ -199,6 +235,22 @@ class PPTXWriter:
             except Exception as e:
                 if self.logger:
                     self.logger.debug(f"Failed to set stroke width: {e}")
+
+        # Swimlane header divider (draw.io visual split between header and content)
+        try:
+            if getattr(shape.style, "is_swimlane", False):
+                start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+                draw_divider = getattr(shape.style, "swimlane_line", True)
+                if start_size > 0 and draw_divider:
+                    self._add_swimlane_header_divider(
+                        slide=slide,
+                        shape=shape,
+                        stroke_color=stroke_color,
+                        stroke_width_px=shape.style.stroke_width,
+                    )
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to add swimlane header divider: {e}")
         
         # Shadow settings (similar to legacy: disable shadow when has_shadow is False)
         try:
@@ -215,6 +267,73 @@ class PPTXWriter:
                 self._disable_shadow_xml(shp)
         
         return shp
+
+    def _add_swimlane_header_divider(
+        self,
+        slide,
+        shape: ShapeElement,
+        stroke_color: RGBColor,
+        stroke_width_px: float,
+    ):
+        """Draw the swimlane header divider line."""
+        start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+        if start_size <= 0:
+            return None
+
+        is_horizontal = bool(getattr(shape.style, "swimlane_horizontal", False))
+        if is_horizontal:
+            # Header on top: horizontal divider at y + startSize
+            x1 = shape.x
+            y1 = shape.y + start_size
+            x2 = shape.x + shape.w
+            y2 = y1
+        else:
+            # Header on left: vertical divider at x + startSize
+            x1 = shape.x + start_size
+            y1 = shape.y
+            x2 = x1
+            y2 = shape.y + shape.h
+
+        line = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            px_to_emu(x1),
+            px_to_emu(y1),
+            px_to_emu(x2),
+            px_to_emu(y2),
+        )
+        try:
+            if shape.id:
+                line.name = f"drawio2pptx:swimlane-divider:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set swimlane divider name: {e}")
+
+        try:
+            line.line.fill.solid()
+            self._set_stroke_color_xml(line, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set swimlane divider color: {e}")
+
+        if stroke_width_px and stroke_width_px > 0:
+            try:
+                line.line.width = px_to_pt(stroke_width_px)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set swimlane divider width: {e}")
+
+        # Shadow follows swimlane shape
+        try:
+            if getattr(shape.style, "has_shadow", False):
+                line.shadow.inherit = True
+            else:
+                line.shadow.inherit = False
+                self._disable_shadow_xml(line)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set swimlane divider shadow: {e}")
+
+        return line
     
     def _add_connector(self, slide, connector: ConnectorElement):
         """Add connector (generates straight connectors for each segment for polylines)"""
@@ -766,6 +885,8 @@ class PPTXWriter:
         paragraphs: List[TextParagraph],
         default_highlight_color: Optional[RGBColor] = None,
         word_wrap: bool = True,
+        margin_overrides_px: Optional[Tuple[float, float, float, float]] = None,
+        text_direction: Optional[str] = None,
     ):
         """Set text frame"""
         if not paragraphs:
@@ -775,12 +896,27 @@ class PPTXWriter:
         text_frame.word_wrap = word_wrap
         text_frame.auto_size = None
         
+        # Optional text direction (used for vertical swimlane headers)
+        if text_direction is not None:
+            try:
+                self._set_text_direction_xml(text_frame, text_direction)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set text direction: {e}")
+
         # Get padding from first paragraph
         first_para = paragraphs[0]
-        text_frame.margin_top = px_to_emu(first_para.spacing_top or 0)
-        text_frame.margin_left = px_to_emu(first_para.spacing_left or 0)
-        text_frame.margin_bottom = px_to_emu(first_para.spacing_bottom or 0)
-        text_frame.margin_right = px_to_emu(first_para.spacing_right or 0)
+        if margin_overrides_px is not None:
+            top_px, left_px, bottom_px, right_px = margin_overrides_px
+            text_frame.margin_top = px_to_emu(top_px or 0)
+            text_frame.margin_left = px_to_emu(left_px or 0)
+            text_frame.margin_bottom = px_to_emu(bottom_px or 0)
+            text_frame.margin_right = px_to_emu(right_px or 0)
+        else:
+            text_frame.margin_top = px_to_emu(first_para.spacing_top or 0)
+            text_frame.margin_left = px_to_emu(first_para.spacing_left or 0)
+            text_frame.margin_bottom = px_to_emu(first_para.spacing_bottom or 0)
+            text_frame.margin_right = px_to_emu(first_para.spacing_right or 0)
         
         # Set vertical anchor (similar to legacy: default is middle)
         VERTICAL_ALIGN_MAP = {
@@ -881,14 +1017,20 @@ class PPTXWriter:
         text_frame.vertical_anchor = saved_vertical_anchor
         
         # Set vertical anchor via XML (similar to legacy: workaround for python-pptx bug)
-        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap)
+        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap, margin_overrides_px)
         
         # Set spacing of all paragraphs to 0 (similar to legacy: affects vertical alignment)
         for para in text_frame.paragraphs:
             para.space_before = Pt(0)
             para.space_after = Pt(0)
     
-    def _set_vertical_anchor_xml(self, text_frame, anchor_value: str, word_wrap: bool = True):
+    def _set_vertical_anchor_xml(
+        self,
+        text_frame,
+        anchor_value: str,
+        word_wrap: bool = True,
+        margin_overrides_px: Optional[Tuple[float, float, float, float]] = None,
+    ):
         """Set vertical anchor via XML"""
         try:
             body_pr = text_frame._element.find(f'.//{_a("bodyPr")}')
@@ -896,10 +1038,17 @@ class PPTXWriter:
                 body_pr.set('anchor', anchor_value)
                 if body_pr.get('anchorCtr') is not None:
                     body_pr.attrib.pop('anchorCtr', None)
-                body_pr.set('tIns', '0')
-                body_pr.set('lIns', '0')
-                body_pr.set('bIns', '0')
-                body_pr.set('rIns', '0')
+                if margin_overrides_px is not None:
+                    top_px, left_px, bottom_px, right_px = margin_overrides_px
+                    body_pr.set('tIns', str(int(px_to_emu(top_px or 0))))
+                    body_pr.set('lIns', str(int(px_to_emu(left_px or 0))))
+                    body_pr.set('bIns', str(int(px_to_emu(bottom_px or 0))))
+                    body_pr.set('rIns', str(int(px_to_emu(right_px or 0))))
+                else:
+                    body_pr.set('tIns', '0')
+                    body_pr.set('lIns', '0')
+                    body_pr.set('bIns', '0')
+                    body_pr.set('rIns', '0')
                 # Set wrap attribute based on word_wrap setting
                 # 'square' enables wrapping, 'none' disables it
                 wrap_value = 'square' if word_wrap else 'none'
@@ -907,6 +1056,19 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set vertical anchor XML: {e}")
+
+    def _set_text_direction_xml(self, text_frame, direction: str):
+        """Set text direction via XML (bodyPr@vert)."""
+        if not direction:
+            return
+        try:
+            body_pr = text_frame._element.find(f'.//{_a("bodyPr")}')
+            if body_pr is None:
+                return
+            body_pr.set('vert', str(direction))
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set text direction XML: {e}")
     
     def _set_font_color_xml(self, run, font_color: RGBColor):
         """Set font color via XML (similar to legacy _set_font_color)"""

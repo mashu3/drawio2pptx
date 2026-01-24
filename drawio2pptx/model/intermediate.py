@@ -73,6 +73,11 @@ class Style:
     # Text wrapping (draw.io: whiteSpace=wrap/nowrap). True for wrap, False for nowrap.
     # Default is True (wrap) to match draw.io's default behavior.
     word_wrap: bool = True
+    # Swimlane/container metadata (draw.io: swimlane; startSize; horizontal)
+    is_swimlane: bool = False
+    swimlane_start_size: Optional[float] = None  # px
+    swimlane_horizontal: Optional[bool] = None
+    swimlane_line: Optional[bool] = None
 
 
 @dataclass
