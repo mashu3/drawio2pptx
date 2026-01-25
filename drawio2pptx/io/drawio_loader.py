@@ -17,7 +17,7 @@ from ..model.intermediate import (
 )
 from ..logger import ConversionLogger
 from ..fonts import DRAWIO_DEFAULT_FONT_FAMILY
-from ..config import PARALLELOGRAM_SKEW
+from ..config import PARALLELOGRAM_SKEW, ConversionConfig, default_config
 
 
 class ColorParser:
@@ -441,11 +441,13 @@ class StyleExtractor:
 class DrawIOLoader:
     """draw.io file loading and parsing"""
     
-    def __init__(self, logger: Optional[ConversionLogger] = None):
+    def __init__(self, logger: Optional[ConversionLogger] = None, config: Optional[ConversionConfig] = None):
         """
         Args:
             logger: ConversionLogger instance
+            config: ConversionConfig instance (uses default_config if None)
         """
+        self.config = config or default_config
         self.logger = logger
         self.color_parser = ColorParser()
         self.style_extractor = StyleExtractor(self.color_parser, logger)

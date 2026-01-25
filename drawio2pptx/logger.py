@@ -6,6 +6,7 @@ Provides detection and warnings for unsupported effects, coordinate error checki
 import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
+from .config import ConversionConfig, default_config
 
 
 @dataclass
@@ -20,12 +21,20 @@ class ConversionWarning:
 class ConversionLogger:
     """Logger for conversion process"""
     
-    def __init__(self, warn_unsupported: bool = True):
+    def __init__(self, warn_unsupported: bool = None, config: Optional[ConversionConfig] = None):
         """
         Args:
-            warn_unsupported: Whether to warn about unsupported effects
+            warn_unsupported: Whether to warn about unsupported effects (deprecated: use config instead)
+            config: ConversionConfig instance (uses default_config if None)
         """
-        self.warn_unsupported = warn_unsupported
+        self.config = config or default_config
+        
+        # Use config.warn_unsupported_effects if warn_unsupported is not explicitly provided
+        if warn_unsupported is None:
+            self.warn_unsupported = self.config.warn_unsupported_effects
+        else:
+            self.warn_unsupported = warn_unsupported
+        
         self.warnings: List[ConversionWarning] = []
         self.logger = logging.getLogger('drawio2pptx')
         
@@ -54,8 +63,12 @@ class ConversionLogger:
         self.warnings.append(warning)
         self.logger.warning(f"[{element_id}] {message}")
     
-    def warn_coordinate_error(self, element_id: Optional[str], expected: tuple, actual: tuple, tolerance: float):
+    def warn_coordinate_error(self, element_id: Optional[str], expected: tuple, actual: tuple, tolerance: Optional[float] = None):
         """Record warning for coordinate error"""
+        # Use config.coordinate_tolerance if tolerance is not provided
+        if tolerance is None:
+            tolerance = self.config.coordinate_tolerance
+        
         message = f"Coordinate error: expected {expected}, got {actual} (tolerance: {tolerance})"
         warning = ConversionWarning(
             element_id=element_id,

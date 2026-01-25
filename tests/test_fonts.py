@@ -54,3 +54,16 @@ def test_drawio_default_font_family():
     """Test DRAWIO_DEFAULT_FONT_FAMILY constant"""
     assert DRAWIO_DEFAULT_FONT_FAMILY == "Helvetica"
 
+
+def test_replace_font_with_custom_config():
+    """Test font replacement with custom config"""
+    custom_config = ConversionConfig(font_replacements={'Arial': 'Times New Roman'})
+    
+    # Should use custom config
+    result = replace_font("Arial", config=custom_config)
+    assert result == "Times New Roman"
+    
+    # Should not affect default config
+    result2 = replace_font("Arial")
+    assert result2 == "Arial"  # default_config has no replacement for Arial
+

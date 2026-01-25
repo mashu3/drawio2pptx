@@ -121,3 +121,31 @@ def test_get_logger():
     logger = get_logger()
     assert isinstance(logger, ConversionLogger)
 
+
+def test_conversion_logger_with_config():
+    """Test ConversionLogger with config"""
+    from drawio2pptx.config import ConversionConfig
+    
+    config = ConversionConfig(warn_unsupported_effects=False, coordinate_tolerance=0.5)
+    logger = ConversionLogger(config=config)
+    
+    assert logger.warn_unsupported is False
+    assert logger.config.coordinate_tolerance == 0.5
+    
+    # Test that coordinate error uses config tolerance
+    logger.warn_coordinate_error("elem1", (10.0, 20.0), (10.5, 20.5))
+    assert len(logger.warnings) == 1
+    assert logger.warnings[0].details['tolerance'] == 0.5
+
+
+def test_conversion_logger_warn_coordinate_error_without_tolerance():
+    """Test warn_coordinate_error without explicit tolerance (uses config)"""
+    from drawio2pptx.config import ConversionConfig
+    
+    config = ConversionConfig(coordinate_tolerance=0.2)
+    logger = ConversionLogger(config=config)
+    logger.warn_coordinate_error("elem1", (10.0, 20.0), (10.5, 20.5))
+    
+    assert len(logger.warnings) == 1
+    assert logger.warnings[0].details['tolerance'] == 0.2
+

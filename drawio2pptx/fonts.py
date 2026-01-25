@@ -4,7 +4,7 @@ Font validation and replacement module
 Provides font validation and replacement
 """
 from typing import Optional, Dict
-from .config import default_config
+from .config import ConversionConfig, default_config
 
 # draw.io's default font family
 # In draw.io, Helvetica is used when font is not specified
@@ -27,12 +27,13 @@ def validate_font(font_family: Optional[str]) -> bool:
     return True
 
 
-def replace_font(font_family: Optional[str]) -> Optional[str]:
+def replace_font(font_family: Optional[str], config: Optional[ConversionConfig] = None) -> Optional[str]:
     """
     Replace font (based on configuration)
     
     Args:
         font_family: Original font family name
+        config: ConversionConfig instance (uses default_config if None)
     
     Returns:
         Replaced font family name
@@ -41,7 +42,8 @@ def replace_font(font_family: Optional[str]) -> Optional[str]:
         return None
     
     # Get replacement map from configuration
-    replacements = default_config.font_replacements
+    config_to_use = config or default_config
+    replacements = config_to_use.font_replacements
     
     if font_family in replacements:
         return replacements[font_family]

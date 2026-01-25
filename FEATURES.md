@@ -22,8 +22,8 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Conversion Processing
 
-- [ ] Conversion option settings
-- [ ] Conversion error handling and logging
+- [x] Conversion option settings (ConversionConfig fully integrated into main conversion flow)
+- [x] Conversion error handling and logging (ConversionLogger implemented)
 - [ ] Conversion progress display
 - [ ] Batch conversion (convert multiple files at once)
 
@@ -53,7 +53,7 @@ This document provides a detailed checklist of implemented and planned features 
 
 - [x] Color specification (strokeColor=#RRGGBB, etc.)
 - [x] Default (PowerPoint default when strokeColor is not specified)
-- [ ] Transparent (strokeColor=none)
+- [x] Transparent (strokeColor=none)
 - [ ] Gradient colors
 
 ### Font Color (fontColor)
@@ -227,7 +227,7 @@ This document provides a detailed checklist of implemented and planned features 
 - [ ] Actor (ACTOR / actor)
 - [ ] Text label (TEXT / text)
 - [ ] Image (IMAGE / image)
-- [ ] Swimlane (swimlane)
+- [x] Swimlane (swimlane) - horizontal and vertical swimlanes with header divider support
 - [ ] Container (container)
 
 ### Flowchart Shapes

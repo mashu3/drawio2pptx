@@ -9,8 +9,9 @@ from pathlib import Path
 
 from drawio2pptx.io.drawio_loader import DrawIOLoader
 from drawio2pptx.io.pptx_writer import PPTXWriter
-from drawio2pptx.logger import get_logger
+from drawio2pptx.logger import get_logger, ConversionLogger
 from drawio2pptx.analysis import compare_conversion
+from drawio2pptx.config import ConversionConfig, default_config
 
 
 def main():
@@ -42,11 +43,14 @@ def main():
     print(f"Parsing: {input_path}")
     
     try:
-        # Create logger
-        logger = get_logger()
+        # Create conversion configuration
+        config = ConversionConfig()  # Use default settings
+        
+        # Create logger with config
+        logger = ConversionLogger(config=config)
         
         # Load draw.io file
-        loader = DrawIOLoader(logger=logger)
+        loader = DrawIOLoader(logger=logger, config=config)
         diagrams = loader.load_file(input_path)
         
         if not diagrams:
@@ -57,7 +61,7 @@ def main():
         page_size = loader.extract_page_size(diagrams[0])
         
         # Create PowerPoint presentation
-        writer = PPTXWriter(logger=logger)
+        writer = PPTXWriter(logger=logger, config=config)
         prs, blank_layout = writer.create_presentation(page_size)
         
         # Process each diagram

@@ -18,7 +18,7 @@ from ..mapping.shape_map import map_shape_type_to_pptx
 from ..mapping.style_map import map_arrow_type, map_arrow_type_with_size, map_dash_pattern
 from ..logger import ConversionLogger
 from ..fonts import replace_font, DRAWIO_DEFAULT_FONT_FAMILY
-from ..config import PARALLELOGRAM_SKEW
+from ..config import PARALLELOGRAM_SKEW, ConversionConfig, default_config
 
 # XML namespaces
 NS_DRAWINGML = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -41,11 +41,13 @@ def _p(tag_name: str) -> str:
 class PPTXWriter:
     """PowerPoint presentation writer"""
     
-    def __init__(self, logger: Optional[ConversionLogger] = None):
+    def __init__(self, logger: Optional[ConversionLogger] = None, config: Optional[ConversionConfig] = None):
         """
         Args:
             logger: ConversionLogger instance
+            config: ConversionConfig instance (uses default_config if None)
         """
+        self.config = config or default_config
         self.logger = logger
     
     def create_presentation(self, page_size: Optional[Tuple[float, float]] = None) -> Presentation:
@@ -1085,7 +1087,7 @@ class PPTXWriter:
                 # If run_data.font_family is None or empty string, use draw.io's default font (Helvetica)
                 # This ensures the same font is used in draw.io and PowerPoint
                 effective_font_family = run_data.font_family or DRAWIO_DEFAULT_FONT_FAMILY
-                replaced_font = replace_font(effective_font_family)
+                replaced_font = replace_font(effective_font_family, config=self.config)
                 if replaced_font:
                     try:
                         run.font.name = replaced_font
