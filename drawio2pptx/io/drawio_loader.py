@@ -103,6 +103,7 @@ class StyleExtractor:
         'square': 'rectangle',
         'ellipse': 'ellipse',
         'circle': 'ellipse',
+        'line': 'line',
         # mxgraph.basic shapes
         'mxgraph.basic.pentagon': 'pentagon',
         'mxgraph.basic.octagon2': 'octagon',
@@ -141,6 +142,16 @@ class StyleExtractor:
                 if k.strip() == key:
                     return v.strip()
         return None
+
+    def is_text_style(self, style_str: str) -> bool:
+        """Return True when the cell is a draw.io text shape."""
+        if not style_str:
+            return False
+        parts = [p.strip().lower() for p in style_str.split(";") if p.strip()]
+        if parts and parts[0] == "text":
+            return True
+        shape_type = self.extract_style_value(style_str, "shape")
+        return bool(shape_type and shape_type.strip().lower() == "text")
     
     def extract_style_float(self, style_str: str, key: str, default: Optional[float] = None) -> Optional[float]:
         """Extract float value from style string"""
@@ -209,6 +220,13 @@ class StyleExtractor:
                             parsed = self.color_parser.parse(value.strip())
                             if parsed:
                                 return parsed
+        # Text shapes should be transparent unless fillColor is explicit.
+        try:
+            if self.is_text_style(style):
+                return None
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to check text style for fill: {e}")
         # If fillColor is omitted, draw.io uses a default fill for most vertex shapes.
         # Treat missing fillColor as "default" for vertices, but keep edges transparent.
         try:
@@ -284,6 +302,20 @@ class StyleExtractor:
                             return parsed
         
         return None
+
+    def extract_no_stroke(self, cell: ET.Element) -> bool:
+        """Detect strokeColor=none explicitly set on the cell."""
+        stroke_color = (cell.attrib.get("strokeColor") or "").strip().lower()
+        if stroke_color == "none":
+            return True
+        style = cell.attrib.get("style", "")
+        if style:
+            for part in style.split(";"):
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "strokeColor" and value.strip().lower() == "none":
+                        return True
+        return False
     
     def extract_font_color(self, cell: ET.Element) -> Optional[RGBColor]:
         """Extract fontColor (also checks inside HTML tags)"""
@@ -610,23 +642,6 @@ class DrawIOLoader:
         except ValueError:
             return (0.0, 0.0)
         
-        # For swimlane parents, add startSize offset to account for header area.
-        # In draw.io, child elements' coordinates are relative to the content area (excluding header).
-        parent_style = parent_cell.attrib.get("style", "")
-        if parent_style and "swimlane" in parent_style:
-            # Extract startSize (header size)
-            start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0)
-            if start_size is None:
-                start_size = 0.0
-            
-            # Extract horizontal attribute (0 = vertical swimlane with left header, 1 = horizontal with top header)
-            horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
-            is_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
-            
-            if is_horizontal:
-                # Horizontal swimlane: header on top
-                parent_y += start_size
-        
         # Recursively get grandparent coordinates
         grandparent_id = parent_cell.attrib.get("parent")
         if grandparent_id:
@@ -653,6 +668,33 @@ class DrawIOLoader:
         # Add parent coordinates if parent exists
         parent_id = cell.attrib.get("parent")
         if parent_id and parent_id not in ("0", "1"):
+            # Handle swimlane header offsets only when the child coordinates
+            # are relative to the content area (not including header).
+            try:
+                parent_cell = None
+                for pcell in mgm_root.findall(".//mxCell"):
+                    if pcell.attrib.get("id") == parent_id:
+                        parent_cell = pcell
+                        break
+                if parent_cell is not None:
+                    parent_style = parent_cell.attrib.get("style", "") or ""
+                    if parent_style and "swimlane" in parent_style:
+                        start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0) or 0.0
+                        horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
+                        is_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
+                        eps = 1e-6
+                        if is_horizontal:
+                            # Header on top: only shift when child y is inside header coords.
+                            if y < start_size - eps:
+                                y += start_size
+                        else:
+                            # Header on left: only shift when child x is inside header coords.
+                            if x < start_size - eps:
+                                x += start_size
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to adjust swimlane child offset: {e}")
+
             parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
             x += parent_x
             y += parent_y
@@ -673,6 +715,8 @@ class DrawIOLoader:
         
         style_str = cell.attrib.get("style", "")
         stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
+        is_text_style = self.style_extractor.is_text_style(style_str)
+        no_stroke = is_text_style or self.style_extractor.extract_no_stroke(cell)
         
         # Extract whiteSpace (text wrapping) setting
         # draw.io: whiteSpace=wrap (default) enables text wrapping, whiteSpace=nowrap disables it
@@ -704,7 +748,8 @@ class DrawIOLoader:
             corner_radius=corner_radius,
             label_background_color=label_bg_color,
             has_shadow=has_shadow,
-            word_wrap=word_wrap
+            word_wrap=word_wrap,
+            no_stroke=no_stroke,
         )
 
         # Swimlane/container metadata (used for header layout in PPTX)
@@ -766,11 +811,15 @@ class DrawIOLoader:
         # Edge style
         edge_style = "straight"
         edge_style_str = self.style_extractor.extract_style_value(style_str, "edgeStyle")
+        edge_style_lower = edge_style_str.lower() if edge_style_str else ""
+        is_elbow_edge = False
         if edge_style_str:
-            if "orthogonal" in edge_style_str.lower():
+            if "orthogonal" in edge_style_lower or "elbow" in edge_style_lower:
                 edge_style = "orthogonal"
-            elif "curved" in edge_style_str.lower():
+            elif "curved" in edge_style_lower:
                 edge_style = "curved"
+        if "elbow" in edge_style_lower:
+            is_elbow_edge = True
         
         # Arrow settings
         start_arrow = self.style_extractor.extract_style_value(style_str, "startArrow")
@@ -808,6 +857,8 @@ class DrawIOLoader:
         points_raw = []
         points_for_ports = []
         points_raw_offset_flags = []
+        source_point = None
+        target_point = None
         if geo is not None:
             # Find Array[@as="points"] (drawio's waypoints are stored here)
             array_elem = geo.find('./Array[@as="points"]')
@@ -820,24 +871,33 @@ class DrawIOLoader:
                     points_for_ports.append((px, py))
                     points_raw_offset_flags.append(False)
             else:
-                # If Array is not present, find mxPoint as direct child of mxGeometry
-                # Note: mxPoint with as="offset" are label offsets, not waypoints.
-                # However, we include them in points_raw to maintain backward compatibility
-                # with the original behavior for endpoint calculation.
+                # If Array is not present, find mxPoint as direct child of mxGeometry.
+                # Ignore label offsets and source/target hint points; they are not waypoints.
                 for point_elem in geo.findall("./mxPoint"):
+                    role = (point_elem.attrib.get("as") or "").strip()
+                    if role == "sourcePoint":
+                        px = float(point_elem.attrib.get("x", "0") or 0)
+                        py = float(point_elem.attrib.get("y", "0") or 0)
+                        source_point = (px, py)
+                        continue
+                    if role == "targetPoint":
+                        px = float(point_elem.attrib.get("x", "0") or 0)
+                        py = float(point_elem.attrib.get("y", "0") or 0)
+                        target_point = (px, py)
+                        continue
+                    if role == "offset":
+                        continue
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
-                    is_offset = (point_elem.attrib.get("as") or "").strip() == "offset"
                     points_raw.append((px, py))
-                    points_raw_offset_flags.append(is_offset)
-                    if not is_offset:
-                        # Only use non-offset points for port inference.
-                        points_for_ports.append((px, py))
+                    points_raw_offset_flags.append(False)
+                    # Only use waypoint points for port inference.
+                    points_for_ports.append((px, py))
 
         # Waypoints are stored relative to the connector's parent. Align them to the
         # same absolute coordinate space as shapes.
         parent_id = cell.attrib.get("parent")
-        if parent_id and parent_id not in ("0", "1") and points_raw:
+        if parent_id and parent_id not in ("0", "1") and (points_raw or source_point or target_point):
             parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
             points_for_ports = [(px + parent_x, py + parent_y) for px, py in points_for_ports]
             if points_raw_offset_flags and len(points_raw_offset_flags) == len(points_raw):
@@ -847,6 +907,10 @@ class DrawIOLoader:
                 ]
             else:
                 points_raw = [(px + parent_x, py + parent_y) for px, py in points_raw]
+            if source_point:
+                source_point = (source_point[0] + parent_x, source_point[1] + parent_y)
+            if target_point:
+                target_point = (target_point[0] + parent_x, target_point[1] + parent_y)
 
         def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
             """
@@ -1048,9 +1112,44 @@ class DrawIOLoader:
         except Exception:
             grid_size = None
 
+        def _clamp01(val: Optional[float]) -> Optional[float]:
+            if val is None:
+                return None
+            return max(0.0, min(1.0, val))
+
+        hint_exit_x = None
+        hint_exit_y = None
+        hint_entry_x = None
+        hint_entry_y = None
+        if edge_style == "orthogonal" and not points_raw and source_point and target_point:
+            sxp, syp = source_point
+            txp, typ = target_point
+            align_tol = 1.0
+            dx_hint = abs(sxp - txp)
+            dy_hint = abs(syp - typ)
+            if not (dx_hint <= align_tol and dy_hint <= align_tol):
+                if dy_hint <= align_tol:
+                    y_hint = (syp + typ) / 2.0
+                    rel_exit_y = _clamp01((y_hint - source_shape.y) / source_shape.h if source_shape.h else 0.5)
+                    rel_entry_y = _clamp01((y_hint - target_shape.y) / target_shape.h if target_shape.h else 0.5)
+                    if (target_shape.x + target_shape.w / 2.0) >= (source_shape.x + source_shape.w / 2.0):
+                        hint_exit_x, hint_entry_x = 1.0, 0.0
+                    else:
+                        hint_exit_x, hint_entry_x = 0.0, 1.0
+                    hint_exit_y, hint_entry_y = rel_exit_y, rel_entry_y
+                elif dx_hint <= align_tol:
+                    x_hint = (sxp + txp) / 2.0
+                    rel_exit_x = _clamp01((x_hint - source_shape.x) / source_shape.w if source_shape.w else 0.5)
+                    rel_entry_x = _clamp01((x_hint - target_shape.x) / target_shape.w if target_shape.w else 0.5)
+                    if (target_shape.y + target_shape.h / 2.0) >= (source_shape.y + source_shape.h / 2.0):
+                        hint_exit_y, hint_entry_y = 1.0, 0.0
+                    else:
+                        hint_exit_y, hint_entry_y = 0.0, 1.0
+                    hint_exit_x, hint_entry_x = rel_exit_x, rel_entry_x
+
         # If draw.io doesn't store waypoints and explicit ports are also missing,
         # build a better default orthogonal polyline by evaluating HV/VH patterns.
-        if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
+        if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None and not is_elbow_edge:
             points = _build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
             source_x, source_y = points[0]
             target_x, target_y = points[-1]
@@ -1063,6 +1162,15 @@ class DrawIOLoader:
                 auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
                     source_shape, target_shape, points_for_ports
                 )
+
+            if exit_x_val is None and hint_exit_x is not None:
+                exit_x_val = hint_exit_x
+            if exit_y_val is None and hint_exit_y is not None:
+                exit_y_val = hint_exit_y
+            if entry_x_val is None and hint_entry_x is not None:
+                entry_x_val = hint_entry_x
+            if entry_y_val is None and hint_entry_y is not None:
+                entry_y_val = hint_entry_y
 
             exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
             exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
@@ -1170,13 +1278,16 @@ class DrawIOLoader:
                 if label_cell.attrib.get("vertex") != "1":
                     continue
                 style_val = label_cell.attrib.get("style", "") or ""
-                if "edgeLabel" not in style_val:
+                is_edge_label = "edgeLabel" in style_val
+                if not is_edge_label and label_cell.attrib.get("connectable") != "0":
                     continue
                 child_label = self._extract_edge_label_cell(
                     label_cell=label_cell,
                     connector=connector,
                     default_font_color=font_color,
                     default_label_bg_color=label_bg_color,
+                    source_shape=source_shape,
+                    target_shape=target_shape,
                 )
                 if child_label is not None:
                     labels.append(child_label)
@@ -1200,7 +1311,7 @@ class DrawIOLoader:
         if not text_paragraphs:
             return None
 
-        label_x, label_y = self._calculate_connector_label_position(cell, connector.points, connector.edge_style)
+        label_x, label_y = self._calculate_connector_label_position(cell, connector.points, connector.edge_style, style_str)
         label_w, label_h = self._estimate_text_box_size(text_paragraphs)
 
         return TextElement(
@@ -1221,6 +1332,8 @@ class DrawIOLoader:
         connector: ConnectorElement,
         default_font_color: Optional[RGBColor],
         default_label_bg_color: Optional[RGBColor],
+        source_shape: Optional[ShapeElement] = None,
+        target_shape: Optional[ShapeElement] = None,
     ) -> Optional[TextElement]:
         """Extract edge label from a child mxCell (edgeLabel style)."""
         text_raw = label_cell.attrib.get("value", "") or ""
@@ -1235,12 +1348,99 @@ class DrawIOLoader:
         if not text_paragraphs:
             return None
 
-        label_x, label_y = self._calculate_connector_label_position(label_cell, connector.points, connector.edge_style)
+        label_x, label_y = self._calculate_connector_label_position(
+            label_cell, connector.points, connector.edge_style, label_style_str
+        )
         label_w, label_h = self._estimate_text_box_size(text_paragraphs)
 
+        # Determine alignment for positioning
+        align = self.style_extractor.extract_style_value(label_style_str, "align")
+        vertical_align = self.style_extractor.extract_style_value(label_style_str, "verticalAlign")
+        
+        # Get geometry to determine if this is a start/end label
+        geo = label_cell.find(".//mxGeometry")
+        is_start_label = False
+        is_end_label = False
+        if geo is not None and (geo.attrib.get("relative") or "").strip() == "1":
+            try:
+                rel_x = float(geo.attrib.get("x", "0") or 0)
+                if align == "left" and rel_x <= -0.5:
+                    is_start_label = True
+                elif align == "right" and rel_x >= 0.5:
+                    is_end_label = True
+            except ValueError:
+                pass
+
+        # Adjust position based on alignment
+        if is_start_label:
+            # Start label: align to left
+            text_x = label_x
+        elif is_end_label:
+            # End label: align to right
+            text_x = label_x - label_w
+        else:
+            # Center label: center align
+            text_x = label_x - label_w / 2.0
+
+        # Adjust vertical position based on verticalAlign
+        if vertical_align == "bottom":
+            # Place above the line (label's bottom edge aligns with the line)
+            text_y = label_y - label_h
+        elif vertical_align == "top":
+            # Place above the line (label's top edge aligns with the line)
+            text_y = label_y - label_h
+        else:
+            # Center vertically
+            text_y = label_y - label_h / 2.0
+
+        # Adjust position to ensure label is outside containers
+        if is_start_label and source_shape:
+            # Ensure start label is outside source container
+            # Check if label overlaps with source shape
+            label_right = text_x + label_w
+            label_bottom = text_y + label_h
+            source_right = source_shape.x + source_shape.w
+            source_bottom = source_shape.y + source_shape.h
+            
+            # If label is inside source shape, move it outside
+            if (source_shape.x <= text_x <= source_right and 
+                source_shape.y <= text_y <= source_bottom):
+                # Move label to the right of the source shape
+                text_x = source_right + 5.0
+            elif (source_shape.x <= label_right <= source_right and 
+                  source_shape.y <= label_bottom <= source_bottom):
+                # Move label to the right of the source shape
+                text_x = source_right + 5.0
+            elif (text_x <= source_shape.x <= label_right and 
+                  text_y <= source_shape.y <= label_bottom):
+                # Move label below the source shape
+                text_y = source_bottom + 5.0
+                
+        elif is_end_label and target_shape:
+            # Ensure end label is outside target container
+            # Check if label overlaps with target shape
+            label_right = text_x + label_w
+            label_bottom = text_y + label_h
+            target_right = target_shape.x + target_shape.w
+            target_bottom = target_shape.y + target_shape.h
+            
+            # If label is inside target shape, move it outside
+            if (target_shape.x <= text_x <= target_right and 
+                target_shape.y <= text_y <= target_bottom):
+                # Move label to the left of the target shape
+                text_x = target_shape.x - label_w - 5.0
+            elif (target_shape.x <= label_right <= target_right and 
+                  target_shape.y <= label_bottom <= target_bottom):
+                # Move label to the left of the target shape
+                text_x = target_shape.x - label_w - 5.0
+            elif (text_x <= target_shape.x <= label_right and 
+                  text_y <= target_shape.y <= label_bottom):
+                # Move label below the target shape
+                text_y = target_bottom + 5.0
+
         return TextElement(
-            x=label_x - label_w / 2.0,
-            y=label_y - label_h / 2.0,
+            x=text_x,
+            y=text_y,
             w=label_w,
             h=label_h,
             text=text_paragraphs,
@@ -1255,6 +1455,7 @@ class DrawIOLoader:
         cell: ET.Element,
         points: List[tuple],
         edge_style: str,
+        style_str: str = "",
     ) -> tuple:
         """Return label anchor position (px) for a connector."""
         if not points or len(points) < 2:
@@ -1273,13 +1474,39 @@ class DrawIOLoader:
             seg_lengths.append(seg_len)
             total_len += seg_len
 
+        # Determine if this is a start or end label
+        align = self.style_extractor.extract_style_value(style_str, "align") if style_str else None
+        vertical_align = self.style_extractor.extract_style_value(style_str, "verticalAlign") if style_str else None
+        geo = cell.find(".//mxGeometry")
+        is_start_label = False
+        is_end_label = False
+        if geo is not None and (geo.attrib.get("relative") or "").strip() == "1":
+            try:
+                rel_x = float(geo.attrib.get("x", "0") or 0)
+                if align == "left" and rel_x <= -0.5:
+                    is_start_label = True
+                elif align == "right" and rel_x >= 0.5:
+                    is_end_label = True
+            except ValueError:
+                pass
+
         if total_len <= 1e-6:
             sx, sy = points[0]
             tx, ty = points[-1]
-            base_x, base_y = (sx + tx) / 2.0, (sy + ty) / 2.0
+            if is_start_label:
+                base_x, base_y = sx, sy
+            elif is_end_label:
+                base_x, base_y = tx, ty
+            else:
+                base_x, base_y = (sx + tx) / 2.0, (sy + ty) / 2.0
             seg_dx, seg_dy = (tx - sx), (ty - sy)
         else:
             rel_pos, rel_offset, abs_offset = self._extract_edge_label_geometry(cell)
+            # Override rel_pos for start/end labels
+            if is_start_label:
+                rel_pos = 0.0
+            elif is_end_label:
+                rel_pos = 1.0
             t_rel = min(max(rel_pos, 0.0), 1.0)
             target_len = total_len * t_rel
             acc = 0.0
@@ -1318,8 +1545,12 @@ class DrawIOLoader:
                 n_x = -seg_dy / seg_len
                 n_y = seg_dx / seg_len
 
-        pos_x = base_x + n_x * rel_y + abs_x
-        pos_y = base_y + n_y * rel_y + abs_y
+        # For verticalAlign=bottom, the label should be above the line
+        # In draw.io, positive rel_y means upward, so we keep the normal direction
+        offset_multiplier = 1.0
+
+        pos_x = base_x + n_x * rel_y * offset_multiplier + abs_x
+        pos_y = base_y + n_y * rel_y * offset_multiplier + abs_y
 
         # If geometry has non-relative x/y, treat them as absolute offsets in screen space.
         if not self._edge_label_is_relative(cell):
