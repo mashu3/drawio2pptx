@@ -78,6 +78,8 @@ class Style:
     swimlane_start_size: Optional[float] = None  # px
     swimlane_horizontal: Optional[bool] = None
     swimlane_line: Optional[bool] = None
+    # Explicitly disable stroke (e.g. draw.io text shapes, strokeColor=none)
+    no_stroke: bool = False
 
 
 @dataclass
@@ -111,6 +113,7 @@ class ShapeElement(BaseElement):
     text: List[TextParagraph] = field(default_factory=list)
     image: Optional[ImageData] = None
     shape_type: str = 'rectangle'  # draw.io shape type
+    parent_id: Optional[str] = None  # Parent shape ID (for container children)
 
 
 @dataclass

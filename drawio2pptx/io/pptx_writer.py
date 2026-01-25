@@ -102,6 +102,9 @@ class PPTXWriter:
         """Add shape"""
         if shape.w <= 0 or shape.h <= 0:
             return None
+
+        if (shape.shape_type or "").lower() == "line":
+            return self._add_line_shape(slide, shape)
         
         # Map shape type
         pptx_shape_type = map_shape_type_to_pptx(shape.shape_type)
@@ -220,21 +223,28 @@ class PPTXWriter:
                 self.logger.debug(f"Failed to set gradient fill: {e}")
         
         # Set stroke
-        # Use black as default if stroke is None
-        stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
-        try:
-            shp.line.fill.solid()
-            self._set_stroke_color_xml(shp, stroke_color)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set stroke color: {e}")
-        
-        if shape.style.stroke_width > 0:
+        if getattr(shape.style, "no_stroke", False):
             try:
-                shp.line.width = px_to_pt(shape.style.stroke_width)
+                self._set_no_line_xml(shp)
             except Exception as e:
                 if self.logger:
-                    self.logger.debug(f"Failed to set stroke width: {e}")
+                    self.logger.debug(f"Failed to disable stroke: {e}")
+        else:
+            # Use black as default if stroke is None
+            stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
+            try:
+                shp.line.fill.solid()
+                self._set_stroke_color_xml(shp, stroke_color)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set stroke color: {e}")
+            
+            if shape.style.stroke_width > 0:
+                try:
+                    shp.line.width = px_to_pt(shape.style.stroke_width)
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to set stroke width: {e}")
 
         # Swimlane header divider (draw.io visual split between header and content)
         try:
@@ -267,6 +277,60 @@ class PPTXWriter:
                 self._disable_shadow_xml(shp)
         
         return shp
+
+    def _add_line_shape(self, slide, shape: ShapeElement):
+        """Add line shape (draw.io line vertex) as a connector."""
+        # Determine orientation (default to horizontal).
+        if shape.w >= shape.h:
+            y = shape.y + (shape.h / 2.0)
+            x1, y1 = shape.x, y
+            x2, y2 = shape.x + shape.w, y
+        else:
+            x = shape.x + (shape.w / 2.0)
+            x1, y1 = x, shape.y
+            x2, y2 = x, shape.y + shape.h
+
+        line = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            px_to_emu(x1),
+            px_to_emu(y1),
+            px_to_emu(x2),
+            px_to_emu(y2),
+        )
+
+        try:
+            if shape.id:
+                line.name = f"drawio2pptx:line:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set line name: {e}")
+
+        stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
+        try:
+            line.line.fill.solid()
+            self._set_edge_stroke_color_xml(line, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set line stroke color: {e}")
+
+        if shape.style.stroke_width > 0:
+            try:
+                line.line.width = px_to_pt(shape.style.stroke_width)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set line width: {e}")
+
+        try:
+            if shape.style.has_shadow:
+                line.shadow.inherit = True
+            else:
+                line.shadow.inherit = False
+                self._disable_shadow_xml(line)
+        except Exception:
+            if not shape.style.has_shadow:
+                self._disable_shadow_xml(line)
+
+        return line
 
     def _add_swimlane_header_divider(
         self,
@@ -894,6 +958,39 @@ class PPTXWriter:
             ET.SubElement(sp_pr, _a("noFill"))
         except Exception:
             return None
+
+    def _set_no_line_xml(self, shape):
+        """Force <a:noFill/> on the line (ln) via XML."""
+        try:
+            if not hasattr(shape, "_element"):
+                return
+
+            shape_element = shape._element
+            sp_pr = None
+            for child in shape_element:
+                if child.tag.endswith("}spPr") or "spPr" in child.tag:
+                    sp_pr = child
+                    break
+            if sp_pr is None:
+                sp_pr = shape_element.find(".//a:spPr", namespaces=NSMAP_DRAWINGML)
+            if sp_pr is None:
+                return
+
+            ln_element = sp_pr.find(".//a:ln", namespaces=NSMAP_DRAWINGML)
+            if ln_element is None:
+                ln_element = ET.SubElement(sp_pr, _a("ln"))
+
+            for tag in ("noFill", "solidFill", "gradFill", "pattFill", "blipFill"):
+                for elem in ln_element.findall(f".//a:{tag}", namespaces=NSMAP_DRAWINGML):
+                    try:
+                        ln_element.remove(elem)
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to remove line element {tag}: {e}")
+
+            ET.SubElement(ln_element, _a("noFill"))
+        except Exception:
+            return None
     
     def _set_text_frame(
         self,
@@ -929,10 +1026,16 @@ class PPTXWriter:
             text_frame.margin_bottom = px_to_emu(bottom_px or 0)
             text_frame.margin_right = px_to_emu(right_px or 0)
         else:
-            text_frame.margin_top = px_to_emu(first_para.spacing_top or 0)
-            text_frame.margin_left = px_to_emu(first_para.spacing_left or 0)
-            text_frame.margin_bottom = px_to_emu(first_para.spacing_bottom or 0)
-            text_frame.margin_right = px_to_emu(first_para.spacing_right or 0)
+            top_px = first_para.spacing_top or 0
+            left_px = first_para.spacing_left or 0
+            bottom_px = first_para.spacing_bottom or 0
+            right_px = first_para.spacing_right or 0
+            text_frame.margin_top = px_to_emu(top_px)
+            text_frame.margin_left = px_to_emu(left_px)
+            text_frame.margin_bottom = px_to_emu(bottom_px)
+            text_frame.margin_right = px_to_emu(right_px)
+        
+        margin_px = (top_px or 0, left_px or 0, bottom_px or 0, right_px or 0)
         
         # Set vertical anchor (similar to legacy: default is middle)
         VERTICAL_ALIGN_MAP = {
@@ -1033,7 +1136,7 @@ class PPTXWriter:
         text_frame.vertical_anchor = saved_vertical_anchor
         
         # Set vertical anchor via XML (similar to legacy: workaround for python-pptx bug)
-        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap, margin_overrides_px)
+        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap, margin_px)
         
         # Set spacing of all paragraphs to 0 (similar to legacy: affects vertical alignment)
         for para in text_frame.paragraphs:
@@ -1045,7 +1148,7 @@ class PPTXWriter:
         text_frame,
         anchor_value: str,
         word_wrap: bool = True,
-        margin_overrides_px: Optional[Tuple[float, float, float, float]] = None,
+        margin_px: Optional[Tuple[float, float, float, float]] = None,
     ):
         """Set vertical anchor via XML"""
         try:
@@ -1054,17 +1157,12 @@ class PPTXWriter:
                 body_pr.set('anchor', anchor_value)
                 if body_pr.get('anchorCtr') is not None:
                     body_pr.attrib.pop('anchorCtr', None)
-                if margin_overrides_px is not None:
-                    top_px, left_px, bottom_px, right_px = margin_overrides_px
+                if margin_px is not None:
+                    top_px, left_px, bottom_px, right_px = margin_px
                     body_pr.set('tIns', str(int(px_to_emu(top_px or 0))))
                     body_pr.set('lIns', str(int(px_to_emu(left_px or 0))))
                     body_pr.set('bIns', str(int(px_to_emu(bottom_px or 0))))
                     body_pr.set('rIns', str(int(px_to_emu(right_px or 0))))
-                else:
-                    body_pr.set('tIns', '0')
-                    body_pr.set('lIns', '0')
-                    body_pr.set('bIns', '0')
-                    body_pr.set('rIns', '0')
                 # Set wrap attribute based on word_wrap setting
                 # 'square' enables wrapping, 'none' disables it
                 wrap_value = 'square' if word_wrap else 'none'
