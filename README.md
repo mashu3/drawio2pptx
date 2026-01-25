@@ -117,11 +117,11 @@ drawio2pptx sample.drawio sample.pptx --analyze
 
 ## 📄 Sample files
 
-The sample `.drawio` file included in this repository was created by the author
+The sample `.drawio` files included in this repository were created by the author
 for demonstration and testing purposes only.
 
-It does not include any source code or assets from diagrams.net (draw.io).
-Any third-party icons used in the diagram remain the property of their
+They do not include any source code or assets from diagrams.net (draw.io).
+Any third-party icons used in the diagrams remain the property of their
 respective owners.
 
 ---

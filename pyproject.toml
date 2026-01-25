@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drawio2pptx"
-version = "0.0.2"
+version = "0.0.3"
 description = "Convert draw.io (diagrams.net) files to PowerPoint (.pptx) format - mxGraph to PresentationML converter"
 readme = "README.md"
 requires-python = ">=3.8"
