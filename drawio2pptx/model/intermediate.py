@@ -80,6 +80,8 @@ class Style:
     swimlane_line: Optional[bool] = None
     # Explicitly disable stroke (e.g. draw.io text shapes, strokeColor=none)
     no_stroke: bool = False
+    # BPMN symbol (e.g., 'parallelGw' for parallel gateway)
+    bpmn_symbol: Optional[str] = None
 
 
 @dataclass

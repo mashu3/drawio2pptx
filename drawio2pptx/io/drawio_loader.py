@@ -114,6 +114,10 @@ class StyleExtractor:
         'mxgraph.basic.6_point_star': '6_point_star',
         'mxgraph.basic.8_point_star': '8_point_star',
         'mxgraph.basic.smiley': 'smiley',
+        # mxgraph.flowchart shapes
+        'mxgraph.flowchart.decision': 'decision',
+        # mxgraph.bpmn shapes (gateways are typically diamond-shaped)
+        'mxgraph.bpmn.shape': 'rhombus',
     }
     
     # Font style bit flags: bit position -> attribute name
@@ -713,9 +717,18 @@ class DrawIOLoader:
         font_color = self.style_extractor.extract_font_color(cell)
         label_bg_color = self.style_extractor.extract_label_background_color(cell)
         has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
-        shape_type = self.style_extractor.extract_shape_type(cell)
         
         style_str = cell.attrib.get("style", "")
+        
+        # Extract BPMN symbol attribute before shape_type normalization
+        # Check if the original shape attribute is mxgraph.bpmn.shape
+        original_shape = self.style_extractor.extract_style_value(style_str, "shape")
+        bpmn_symbol = None
+        if original_shape and 'mxgraph.bpmn.shape' in original_shape.lower():
+            bpmn_symbol = self.style_extractor.extract_style_value(style_str, "symbol")
+        
+        shape_type = self.style_extractor.extract_shape_type(cell)
+        
         stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
         is_text_style = self.style_extractor.is_text_style(style_str)
         no_stroke = is_text_style or self.style_extractor.extract_no_stroke(cell)
@@ -752,6 +765,7 @@ class DrawIOLoader:
             has_shadow=has_shadow,
             word_wrap=word_wrap,
             no_stroke=no_stroke,
+            bpmn_symbol=bpmn_symbol,
         )
 
         # Swimlane/container metadata (used for header layout in PPTX)
@@ -1533,11 +1547,13 @@ class DrawIOLoader:
         # Normal direction
         if edge_style == "orthogonal" and abs(seg_dx) + abs(seg_dy) > 1e-6:
             if abs(seg_dx) >= abs(seg_dy):
-                # Horizontal segment: offset in Y (draw.io positive is upward for labels).
-                n_x, n_y = 0.0, -1.0
+                # Horizontal segment: offset in Y.
+                # Use clockwise normal so sign matches draw.io label offsets.
+                n_x, n_y = 0.0, -1.0 if seg_dx >= 0 else 1.0
             else:
                 # Vertical segment: offset in X.
-                n_x, n_y = 1.0, 0.0
+                # Use clockwise normal so upward segments invert the sign.
+                n_x, n_y = (1.0 if seg_dy >= 0 else -1.0), 0.0
         else:
             seg_len = (seg_dx * seg_dx + seg_dy * seg_dy) ** 0.5
             if seg_len <= 1e-6:
