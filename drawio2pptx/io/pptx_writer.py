@@ -4,14 +4,11 @@ PowerPoint output module
 Generates PowerPoint presentations from intermediate models using python-pptx + lxml
 """
 from typing import List, Optional, Tuple
-import zipfile
-import tempfile
-import shutil
 from lxml import etree as ET
 from pptx import Presentation  # type: ignore[import]
 from pptx.util import Emu, Pt  # type: ignore[import]
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR  # type: ignore[import]
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR, MSO_AUTO_SIZE  # type: ignore[import]
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR  # type: ignore[import]
 from pptx.dml.color import RGBColor  # type: ignore[import]
 
 from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun
@@ -83,54 +80,6 @@ class PPTXWriter:
         
         return prs, blank_layout
 
-    def post_process_bpmn_symbol_effects(self, output_path) -> None:
-        """Strip theme effects (e.g., shadows) from BPMN symbol lines."""
-        try:
-            output_path = str(output_path)
-            if not output_path:
-                return
-            with zipfile.ZipFile(output_path, 'r') as zin:
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp_path = tmp.name
-                with zipfile.ZipFile(tmp_path, 'w') as zout:
-                    for item in zin.infolist():
-                        data = zin.read(item.filename)
-                        if item.filename.startswith('ppt/slides/slide') and item.filename.endswith('.xml'):
-                            try:
-                                root = ET.fromstring(data)
-                                changed = self._strip_bpmn_effects_from_slide_xml(root)
-                                if changed:
-                                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
-                            except Exception:
-                                pass
-                        zout.writestr(item, data)
-            shutil.move(tmp_path, output_path)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to post-process BPMN symbol effects: {e}")
-
-    def _strip_bpmn_effects_from_slide_xml(self, root: ET.Element) -> bool:
-        """Remove effectRef/style from BPMN symbol connector shapes."""
-        changed = False
-        try:
-            cxn_shapes = root.xpath(
-                ".//p:cxnSp[p:nvCxnSpPr/p:cNvPr[starts-with(@name, 'drawio2pptx:bpmn-symbol-')]]",
-                namespaces=NSMAP_PRESENTATIONML,
-            )
-            for cxn in cxn_shapes:
-                style = cxn.find('p:style', namespaces=NSMAP_PRESENTATIONML)
-                if style is not None:
-                    cxn.remove(style)
-                    changed = True
-                for effect_ref in cxn.findall('.//a:effectRef', namespaces=NSMAP_DRAWINGML):
-                    parent = effect_ref.getparent()
-                    if parent is not None:
-                        parent.remove(effect_ref)
-                        changed = True
-        except Exception:
-            return changed
-        return changed
-    
     def add_slide(self, prs: Presentation, blank_layout, elements: List[BaseElement]):
         """
         Add elements to slide
@@ -328,12 +277,11 @@ class PPTXWriter:
         except Exception:
             if not shape.style.has_shadow:
                 self._disable_shadow_xml(shp)
-        
+
         # Add BPMN symbol overlay (e.g., plus sign for parallel gateway)
         try:
             bpmn_symbol = getattr(shape.style, "bpmn_symbol", None)
             if bpmn_symbol and bpmn_symbol.lower() == "parallelgw":
-                # Add plus sign overlay in the center of the shape
                 self._add_bpmn_parallel_gateway_symbol(slide, shape)
         except Exception as e:
             if self.logger:
@@ -463,13 +411,14 @@ class PPTXWriter:
         return line
     
     def _add_connector(self, slide, connector: ConnectorElement):
-        """Add connector (generates straight connectors for each segment for polylines)"""
+        """Add connector as a single polyline shape."""
         if not connector.points or len(connector.points) < 2:
             return None
-        
-        # For polyline (orthogonal), generate straight connectors for each segment
-        if connector.edge_style == "orthogonal":
-            return self._add_orthogonal_connector(slide, connector)
+
+        # Simplify nearly straight polylines to avoid jitter in Freeform.
+        points_px = self._simplify_polyline_points(connector.points, tol_px=0.5)
+        if len(points_px) >= 2 and self._is_almost_straight(points_px, tol_px=0.5):
+            return self._add_straight_connector(slide, connector, points_px)
 
         # Arrow settings may affect geometry (open-oval marker needs endpoint trimming).
         start_arrow = connector.style.arrow_start
@@ -486,7 +435,7 @@ class PPTXWriter:
         # Keep marker centers at the original endpoints, but trim the line so it stops at the marker boundary.
         start_marker_center_px = connector.points[0]
         end_marker_center_px = connector.points[-1]
-        line_points_px = list(connector.points)
+        line_points_px = list(points_px)
         if add_open_oval_start or add_open_oval_end:
             try:
                 start_trim = (
@@ -510,7 +459,6 @@ class PPTXWriter:
                 line_points_px = list(connector.points)
         
         # For normal lines (straight), use FreeformBuilder
-        line_points_px = self._dedupe_polyline_points(line_points_px)
         # Convert points to EMU
         points_emu = [(px_to_emu(x), px_to_emu(y)) for x, y in line_points_px]
         
@@ -617,6 +565,187 @@ class PPTXWriter:
         
         return line_shape
 
+    def _add_straight_connector(self, slide, connector: ConnectorElement, points_px: List[Tuple[float, float]]):
+        """Add a single straight connector (line) between endpoints."""
+        if len(points_px) < 2:
+            return None
+
+        # Arrow settings may affect geometry (open-oval marker needs endpoint trimming).
+        start_arrow = connector.style.arrow_start
+        end_arrow = connector.style.arrow_end
+
+        add_open_oval_start = self._should_emulate_open_oval_marker(start_arrow, connector.style.arrow_start_fill)
+        add_open_oval_end = self._should_emulate_open_oval_marker(end_arrow, connector.style.arrow_end_fill)
+        effective_start_arrow = None if add_open_oval_start else start_arrow
+        effective_end_arrow = None if add_open_oval_end else end_arrow
+
+        start_marker_center_px = points_px[0]
+        end_marker_center_px = points_px[-1]
+        line_points_px = list(points_px)
+        if add_open_oval_start or add_open_oval_end:
+            try:
+                start_trim = (
+                    self._open_oval_trim_radius_px(
+                        stroke_width_px=connector.style.stroke_width,
+                        arrow_size_px=connector.style.arrow_start_size_px,
+                    )
+                    if add_open_oval_start
+                    else 0.0
+                )
+                end_trim = (
+                    self._open_oval_trim_radius_px(
+                        stroke_width_px=connector.style.stroke_width,
+                        arrow_size_px=connector.style.arrow_end_size_px,
+                    )
+                    if add_open_oval_end
+                    else 0.0
+                )
+                line_points_px = self._trim_polyline_endpoints_px(line_points_px, start_trim, end_trim)
+            except Exception:
+                line_points_px = list(points_px)
+
+        if len(line_points_px) < 2:
+            return None
+        (x1, y1), (x2, y2) = line_points_px[0], line_points_px[-1]
+        line_shape = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            px_to_emu(x1),
+            px_to_emu(y1),
+            px_to_emu(x2),
+            px_to_emu(y2),
+        )
+
+        try:
+            if connector.id:
+                line_shape.name = f"drawio2pptx:connector:{connector.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set connector name: {e}")
+
+        # Set stroke
+        stroke_color = connector.style.stroke if connector.style.stroke else RGBColor(0, 0, 0)
+        try:
+            line_shape.line.fill.solid()
+            self._set_edge_stroke_color_xml(line_shape, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set connector stroke color: {e}")
+
+        if connector.style.stroke_width > 0:
+            try:
+                line_shape.line.width = px_to_pt(connector.style.stroke_width)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector stroke width: {e}")
+
+        # Disable fill
+        try:
+            line_shape.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to disable connector fill: {e}")
+
+        # Set dash pattern
+        if connector.style.dash:
+            try:
+                self._set_dash_pattern_xml(line_shape, connector.style.dash)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector dash pattern: {e}")
+
+        if effective_start_arrow or effective_end_arrow:
+            self._set_arrow_heads_xml(
+                line_shape,
+                effective_start_arrow,
+                effective_end_arrow,
+                connector.style.arrow_start_fill,
+                connector.style.arrow_end_fill,
+                connector.style.stroke,
+                connector.style.arrow_start_size_px,
+                connector.style.arrow_end_size_px,
+            )
+
+        # Overlay open-oval markers after the connector so it sits on top of the line geometry.
+        marker_configs = {
+            "start": (add_open_oval_start, start_marker_center_px, start_arrow, connector.style.arrow_start_size_px),
+            "end": (add_open_oval_end, end_marker_center_px, end_arrow, connector.style.arrow_end_size_px),
+        }
+        for position, (should_add, center_px, arrow_name, arrow_size_px) in marker_configs.items():
+            if should_add:
+                x, y = center_px
+                self._add_open_oval_marker(
+                    slide=slide,
+                    x_px=x,
+                    y_px=y,
+                    stroke_color=connector.style.stroke,
+                    stroke_width_px=connector.style.stroke_width,
+                    arrow_name=arrow_name,
+                    arrow_size_px=arrow_size_px,
+                    marker_name=f"drawio2pptx:marker:open-oval:{connector.id}:{position}",
+                )
+
+        # Shadow settings
+        try:
+            if connector.style.has_shadow:
+                line_shape.shadow.inherit = True
+            else:
+                line_shape.shadow.inherit = False
+                self._disable_shadow_xml(line_shape)
+        except Exception:
+            if not connector.style.has_shadow:
+                self._disable_shadow_xml(line_shape)
+
+        return line_shape
+
+    @staticmethod
+    def _simplify_polyline_points(points: List[Tuple[float, float]], tol_px: float = 0.5) -> List[Tuple[float, float]]:
+        """Drop nearly collinear points to stabilize Freeform rendering."""
+        if len(points) <= 2:
+            return list(points)
+
+        def _dist_point_to_line(px, py, ax, ay, bx, by):
+            dx = bx - ax
+            dy = by - ay
+            denom = dx * dx + dy * dy
+            if denom <= 1e-9:
+                return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+            t = ((px - ax) * dx + (py - ay) * dy) / denom
+            t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+            cx = ax + t * dx
+            cy = ay + t * dy
+            return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+        simplified = [points[0]]
+        for i in range(1, len(points) - 1):
+            ax, ay = simplified[-1]
+            bx, by = points[i + 1]
+            px, py = points[i]
+            if _dist_point_to_line(px, py, ax, ay, bx, by) > tol_px:
+                simplified.append(points[i])
+        simplified.append(points[-1])
+        return simplified
+
+    @staticmethod
+    def _is_almost_straight(points: List[Tuple[float, float]], tol_px: float = 0.5) -> bool:
+        """Return True if all points are close to the line from start to end."""
+        if len(points) <= 2:
+            return True
+        (ax, ay) = points[0]
+        (bx, by) = points[-1]
+        dx = bx - ax
+        dy = by - ay
+        denom = dx * dx + dy * dy
+        if denom <= 1e-9:
+            return True
+        for (px, py) in points[1:-1]:
+            t = ((px - ax) * dx + (py - ay) * dy) / denom
+            cx = ax + t * dx
+            cy = ay + t * dy
+            dist = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+            if dist > tol_px:
+                return False
+        return True
+
     def _add_text(self, slide, text_element: TextElement):
         """Add standalone text element."""
         if text_element.w <= 0 or text_element.h <= 0:
@@ -656,27 +785,17 @@ class PPTXWriter:
             )
 
         return tb
-    
+
     def _add_bpmn_parallel_gateway_symbol(self, slide, shape: ShapeElement):
-        """Add plus sign overlay for BPMN parallel gateway using lines (not text)"""
-        # Calculate center position and size for the plus sign
-        # Use approximately 100% of the shape's smaller dimension for the plus sign size
-        # (Decision図形に対して100%の大きさにする)
+        """Add plus sign overlay for BPMN parallel gateway using lines (not text)."""
         symbol_size = min(shape.w, shape.h) * 1.0
         center_x = shape.x + shape.w / 2.0
         center_y = shape.y + shape.h / 2.0
-        
-        # Get stroke color from shape (or use black as default)
+
         stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
-        
-        # Calculate line width (use fixed thickness for visibility)
-        # Force 2pt as requested
         line_width_pt = 2.0
-        
-        # Calculate half length of the plus sign lines
-        half_length = symbol_size * 0.25  # 25% of symbol size for each half (1.25x)
-        
-        # Add horizontal line (横線)
+        half_length = symbol_size * 0.25
+
         h_line = slide.shapes.add_connector(
             MSO_CONNECTOR.STRAIGHT,
             px_to_emu(center_x - half_length),
@@ -684,8 +803,6 @@ class PPTXWriter:
             px_to_emu(center_x + half_length),
             px_to_emu(center_y),
         )
-        
-        # Add vertical line (縦線)
         v_line = slide.shapes.add_connector(
             MSO_CONNECTOR.STRAIGHT,
             px_to_emu(center_x),
@@ -693,48 +810,38 @@ class PPTXWriter:
             px_to_emu(center_x),
             px_to_emu(center_y + half_length),
         )
-        
-        # Set line properties for horizontal line
+
         try:
             h_line.line.fill.solid()
             self._set_edge_stroke_color_xml(h_line, stroke_color)
             h_line.line.width = Pt(line_width_pt)
-            # Remove arrowheads via XML
             self._remove_arrowheads_xml(h_line)
-            # Disable shadow on the plus sign lines
             h_line.shadow.inherit = False
             self._disable_shadow_xml(h_line)
-            # Remove effectRef on connector style (prevents theme shadow)
             self._remove_effect_ref_xml(h_line)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set horizontal line properties: {e}")
-        
-        # Set name for horizontal line
+
         try:
             if shape.id:
                 h_line.name = f"drawio2pptx:bpmn-symbol-h:{shape.id}"
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set horizontal line name: {e}")
-        
-        # Set line properties for vertical line
+
         try:
             v_line.line.fill.solid()
             self._set_edge_stroke_color_xml(v_line, stroke_color)
             v_line.line.width = Pt(line_width_pt)
-            # Remove arrowheads via XML
             self._remove_arrowheads_xml(v_line)
-            # Disable shadow on the plus sign lines
             v_line.shadow.inherit = False
             self._disable_shadow_xml(v_line)
-            # Remove effectRef on connector style (prevents theme shadow)
             self._remove_effect_ref_xml(v_line)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set vertical line properties: {e}")
-        
-        # Set name for vertical line
+
         try:
             if shape.id:
                 v_line.name = f"drawio2pptx:bpmn-symbol-v:{shape.id}"
@@ -775,7 +882,6 @@ class PPTXWriter:
                 points_for_segments = self._trim_polyline_endpoints_px(points_for_segments, start_trim, end_trim)
             except Exception:
                 points_for_segments = list(connector.points)
-        points_for_segments = self._dedupe_polyline_points(points_for_segments)
         
         # Split polyline into segments
         segments = split_polyline_to_segments(points_for_segments)
@@ -1076,35 +1182,6 @@ class PPTXWriter:
         if len(pts) < 2:
             return list(points)
         return pts
-
-    @staticmethod
-    def _dedupe_polyline_points(
-        points: List[Tuple[float, float]],
-        eps: float = 1e-6,
-    ) -> List[Tuple[float, float]]:
-        """Remove consecutive near-duplicate points to avoid zero-length segments."""
-        if not points or len(points) < 2:
-            return points
-
-        def dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-            dx = b[0] - a[0]
-            dy = b[1] - a[1]
-            return (dx * dx + dy * dy) ** 0.5
-
-        filtered = [points[0]]
-        for p in points[1:-1]:
-            if dist(filtered[-1], p) > eps:
-                filtered.append(p)
-
-        last = points[-1]
-        if dist(filtered[-1], last) <= eps:
-            filtered[-1] = last
-        else:
-            filtered.append(last)
-
-        if len(filtered) < 2:
-            return [points[0], points[-1]]
-        return filtered
 
     def _set_no_fill_xml(self, shape):
         """Force <a:noFill/> on the shape fill (spPr) via XML."""
@@ -1751,21 +1828,18 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set arrow XML: {e}")
-    
+
     def _remove_arrowheads_xml(self, shape):
-        """Remove arrowheads from a connector line via XML"""
+        """Remove arrowheads from a connector line via XML."""
         try:
             if not hasattr(shape, '_element'):
                 return
-            
+
             shape_element = shape._element
-            
-            # Find ln (line) element
             ln_element = shape_element.find('.//a:ln', namespaces=NSMAP_DRAWINGML)
             if ln_element is None:
                 return
-            
-            # Remove existing arrows
+
             for head_end in ln_element.findall('.//a:headEnd', namespaces=NSMAP_DRAWINGML):
                 ln_element.remove(head_end)
             for tail_end in ln_element.findall('.//a:tailEnd', namespaces=NSMAP_DRAWINGML):
@@ -1780,13 +1854,11 @@ class PPTXWriter:
             if not hasattr(shape, '_element'):
                 return
             shape_element = shape._element
-            # Remove any effectRef elements (namespace-agnostic)
             for effect_ref in list(shape_element.iter()):
                 if effect_ref.tag.endswith('effectRef'):
                     parent = effect_ref.getparent()
                     if parent is not None:
                         parent.remove(effect_ref)
-            # Remove p:style blocks on connectors to avoid theme effects
             for style in shape_element.findall('.//p:style', namespaces=NSMAP_BOTH):
                 parent = style.getparent()
                 if parent is not None:

@@ -567,11 +567,71 @@ class DrawIOLoader:
         # NOTE: We still extract shapes first to build shapes_dict for connector routing; z_index
         #       sorting will restore the original order afterwards.
         cells = list(mgm_root.findall(".//mxCell"))
-        cell_order: Dict[str, int] = {}
+        cell_by_id: Dict[str, ET.Element] = {}
+        document_order: Dict[str, int] = {}
+        children_by_parent: Dict[str, List[str]] = {}
+
+        # Build cell index and parent->children order based on document order.
         for idx, cell in enumerate(cells):
             cid = cell.attrib.get("id")
-            if cid is not None and cid not in cell_order:
-                cell_order[cid] = idx
+            if cid is None:
+                continue
+            if cid not in cell_by_id:
+                cell_by_id[cid] = cell
+            if cid not in document_order:
+                document_order[cid] = idx
+            parent_id = cell.attrib.get("parent")
+            if parent_id:
+                children_by_parent.setdefault(parent_id, []).append(cid)
+
+        # Identify container-like vertices (parents of other cells).
+        parent_ids = set()
+        for cell in cells:
+            parent_id = cell.attrib.get("parent")
+            if parent_id and parent_id not in ("0", "1"):
+                parent_ids.add(parent_id)
+        container_vertex_ids = set()
+        for pid in parent_ids:
+            pcell = cell_by_id.get(pid)
+            if pcell is None:
+                continue
+            if pcell.attrib.get("vertex") == "1" and pcell.attrib.get("edge") != "1":
+                container_vertex_ids.add(pid)
+
+        # Derive draw order by traversing the parent-child hierarchy.
+        # In mxGraph, the order within a parent's children list defines z-order,
+        # and children are drawn above their parent.
+        draw_order_ids: List[str] = []
+        visited: set[str] = set()
+
+        def _append_draw_order(parent_id: str) -> None:
+            for cid in children_by_parent.get(parent_id, []):
+                if cid in visited:
+                    continue
+                visited.add(cid)
+                cell = cell_by_id.get(cid)
+                if cell is None:
+                    continue
+                if cell.attrib.get("vertex") == "1" or cell.attrib.get("edge") == "1":
+                    draw_order_ids.append(cid)
+                _append_draw_order(cid)
+
+        # Start from the root layer(s). Default layer is id="1" under root id="0".
+        if "0" in children_by_parent:
+            _append_draw_order("0")
+        elif "1" in children_by_parent:
+            _append_draw_order("1")
+
+        # Fallback to document order if traversal yielded nothing.
+        if not draw_order_ids:
+            for cid, _ in sorted(document_order.items(), key=lambda x: x[1]):
+                cell = cell_by_id.get(cid)
+                if cell is None:
+                    continue
+                if cell.attrib.get("vertex") == "1" or cell.attrib.get("edge") == "1":
+                    draw_order_ids.append(cid)
+
+        cell_order: Dict[str, int] = {cid: idx for idx, cid in enumerate(draw_order_ids)}
         
         # First extract shapes
         shapes_dict = {}
@@ -582,6 +642,9 @@ class DrawIOLoader:
                     try:
                         if shape.id is not None:
                             shape.z_index = cell_order.get(shape.id, 0)
+                            # Containers should stay behind their contents and connectors.
+                            if shape.id in container_vertex_ids:
+                                shape.z_index -= 100000
                     except Exception as e:
                         if self.logger:
                             self.logger.debug(f"Failed to set z_index for shape {shape.id}: {e}")
@@ -597,6 +660,16 @@ class DrawIOLoader:
                     try:
                         if connector.id is not None:
                             connector.z_index = cell_order.get(connector.id, 0)
+                            # Ensure connectors are drawn above their endpoints.
+                            # Some draw.io exports place edges before vertices; PPTX would then hide arrowheads.
+                            try:
+                                src_z = shapes_dict.get(connector.source_id).z_index if connector.source_id in shapes_dict else None
+                                tgt_z = shapes_dict.get(connector.target_id).z_index if connector.target_id in shapes_dict else None
+                                max_z = max(z for z in (src_z, tgt_z) if z is not None)
+                                if connector.z_index <= max_z:
+                                    connector.z_index = max_z + 1
+                            except Exception:
+                                pass
                     except Exception as e:
                         if self.logger:
                             self.logger.debug(f"Failed to set z_index for connector {connector.id}: {e}")
@@ -687,7 +760,11 @@ class DrawIOLoader:
                     if parent_style and "swimlane" in parent_style:
                         start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0) or 0.0
                         horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
-                        is_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
+                        if horizontal_str is None:
+                            # draw.io default for swimlane is horizontal=1 (header on top).
+                            is_horizontal = True
+                        else:
+                            is_horizontal = horizontal_str.strip() == "1"
                         eps = 1e-6
                         if is_horizontal:
                             # Header on top: only shift when child y is inside header coords.
@@ -717,18 +794,16 @@ class DrawIOLoader:
         font_color = self.style_extractor.extract_font_color(cell)
         label_bg_color = self.style_extractor.extract_label_background_color(cell)
         has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
-        
+
         style_str = cell.attrib.get("style", "")
-        
-        # Extract BPMN symbol attribute before shape_type normalization
-        # Check if the original shape attribute is mxgraph.bpmn.shape
+
+        # Extract BPMN symbol attribute before shape_type normalization.
         original_shape = self.style_extractor.extract_style_value(style_str, "shape")
         bpmn_symbol = None
-        if original_shape and 'mxgraph.bpmn.shape' in original_shape.lower():
+        if original_shape and "mxgraph.bpmn.shape" in original_shape.lower():
             bpmn_symbol = self.style_extractor.extract_style_value(style_str, "symbol")
-        
+
         shape_type = self.style_extractor.extract_shape_type(cell)
-        
         stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
         is_text_style = self.style_extractor.is_text_style(style_str)
         no_stroke = is_text_style or self.style_extractor.extract_no_stroke(cell)
@@ -775,7 +850,11 @@ class DrawIOLoader:
                 start_size = self.style_extractor.extract_style_float(style_str, "startSize", 0.0)
                 style.swimlane_start_size = float(start_size or 0.0)
                 horizontal_str = self.style_extractor.extract_style_value(style_str, "horizontal")
-                style.swimlane_horizontal = bool(horizontal_str and horizontal_str.strip() == "1")
+                if horizontal_str is None:
+                    # draw.io default for swimlane is horizontal=1 (header on top).
+                    style.swimlane_horizontal = True
+                else:
+                    style.swimlane_horizontal = horizontal_str.strip() == "1"
                 swimlane_line_str = self.style_extractor.extract_style_value(style_str, "swimlaneLine")
                 if swimlane_line_str is None:
                     style.swimlane_line = True
@@ -1110,6 +1189,13 @@ class DrawIOLoader:
                 points_b = [p1b, mid_b, p2b]
                 len_b = abs(mid_b[0] - p1b[0]) + abs(mid_b[1] - p1b[1]) + abs(p2b[0] - mid_b[0]) + abs(p2b[1] - mid_b[1])
 
+            # Prefer the route that exits along the dominant axis between centers.
+            # This keeps left/right connections leaving from the side when the target is
+            # mostly horizontal from the source, which matches draw.io's default routing.
+            if abs(dx_c) > abs(dy_c):
+                return points_a
+            if abs(dy_c) > abs(dx_c):
+                return points_b
             return points_a if len_a <= len_b else points_b
 
         # Calculate connection points (automatically infer ports if not specified)
@@ -1546,14 +1632,14 @@ class DrawIOLoader:
 
         # Normal direction
         if edge_style == "orthogonal" and abs(seg_dx) + abs(seg_dy) > 1e-6:
+            # For orthogonal segments, draw.io's label offset is relative to the segment direction.
+            # Use the right-hand normal of the segment so positive rel_y moves to the "right" side.
             if abs(seg_dx) >= abs(seg_dy):
-                # Horizontal segment: offset in Y.
-                # Use clockwise normal so sign matches draw.io label offsets.
-                n_x, n_y = 0.0, -1.0 if seg_dx >= 0 else 1.0
+                # Horizontal segment: right-hand normal is up when moving right, down when moving left.
+                n_x, n_y = (0.0, -1.0) if seg_dx >= 0 else (0.0, 1.0)
             else:
-                # Vertical segment: offset in X.
-                # Use clockwise normal so upward segments invert the sign.
-                n_x, n_y = (1.0 if seg_dy >= 0 else -1.0), 0.0
+                # Vertical segment: right-hand normal is right when moving down, left when moving up.
+                n_x, n_y = (1.0, 0.0) if seg_dy >= 0 else (-1.0, 0.0)
         else:
             seg_len = (seg_dx * seg_dx + seg_dy * seg_dy) ** 0.5
             if seg_len <= 1e-6:

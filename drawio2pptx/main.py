@@ -78,9 +78,6 @@ def main():
         prs.save(output_path)
         print(f"Saved {output_path} ({slide_count} slides)")
 
-        # Post-process: remove BPMN symbol line effects (e.g., shadows)
-        writer.post_process_bpmn_symbol_effects(output_path)
-        
         # Display warnings
         warnings = logger.get_warnings()
         if warnings:
