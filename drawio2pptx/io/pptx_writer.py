@@ -4,11 +4,14 @@ PowerPoint output module
 Generates PowerPoint presentations from intermediate models using python-pptx + lxml
 """
 from typing import List, Optional, Tuple
+import zipfile
+import tempfile
+import shutil
 from lxml import etree as ET
 from pptx import Presentation  # type: ignore[import]
 from pptx.util import Emu, Pt  # type: ignore[import]
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR  # type: ignore[import]
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR  # type: ignore[import]
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR, MSO_AUTO_SIZE  # type: ignore[import]
 from pptx.dml.color import RGBColor  # type: ignore[import]
 
 from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun
@@ -79,6 +82,54 @@ class PPTXWriter:
                     self.logger.debug(f"Failed to set slide size: {e}")
         
         return prs, blank_layout
+
+    def post_process_bpmn_symbol_effects(self, output_path) -> None:
+        """Strip theme effects (e.g., shadows) from BPMN symbol lines."""
+        try:
+            output_path = str(output_path)
+            if not output_path:
+                return
+            with zipfile.ZipFile(output_path, 'r') as zin:
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                with zipfile.ZipFile(tmp_path, 'w') as zout:
+                    for item in zin.infolist():
+                        data = zin.read(item.filename)
+                        if item.filename.startswith('ppt/slides/slide') and item.filename.endswith('.xml'):
+                            try:
+                                root = ET.fromstring(data)
+                                changed = self._strip_bpmn_effects_from_slide_xml(root)
+                                if changed:
+                                    data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+                            except Exception:
+                                pass
+                        zout.writestr(item, data)
+            shutil.move(tmp_path, output_path)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to post-process BPMN symbol effects: {e}")
+
+    def _strip_bpmn_effects_from_slide_xml(self, root: ET.Element) -> bool:
+        """Remove effectRef/style from BPMN symbol connector shapes."""
+        changed = False
+        try:
+            cxn_shapes = root.xpath(
+                ".//p:cxnSp[p:nvCxnSpPr/p:cNvPr[starts-with(@name, 'drawio2pptx:bpmn-symbol-')]]",
+                namespaces=NSMAP_PRESENTATIONML,
+            )
+            for cxn in cxn_shapes:
+                style = cxn.find('p:style', namespaces=NSMAP_PRESENTATIONML)
+                if style is not None:
+                    cxn.remove(style)
+                    changed = True
+                for effect_ref in cxn.findall('.//a:effectRef', namespaces=NSMAP_DRAWINGML):
+                    parent = effect_ref.getparent()
+                    if parent is not None:
+                        parent.remove(effect_ref)
+                        changed = True
+        except Exception:
+            return changed
+        return changed
     
     def add_slide(self, prs: Presentation, blank_layout, elements: List[BaseElement]):
         """
@@ -278,6 +329,16 @@ class PPTXWriter:
             if not shape.style.has_shadow:
                 self._disable_shadow_xml(shp)
         
+        # Add BPMN symbol overlay (e.g., plus sign for parallel gateway)
+        try:
+            bpmn_symbol = getattr(shape.style, "bpmn_symbol", None)
+            if bpmn_symbol and bpmn_symbol.lower() == "parallelgw":
+                # Add plus sign overlay in the center of the shape
+                self._add_bpmn_parallel_gateway_symbol(slide, shape)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to add BPMN symbol overlay: {e}")
+        
         return shp
 
     def _add_line_shape(self, slide, shape: ShapeElement):
@@ -449,6 +510,7 @@ class PPTXWriter:
                 line_points_px = list(connector.points)
         
         # For normal lines (straight), use FreeformBuilder
+        line_points_px = self._dedupe_polyline_points(line_points_px)
         # Convert points to EMU
         points_emu = [(px_to_emu(x), px_to_emu(y)) for x, y in line_points_px]
         
@@ -595,6 +657,91 @@ class PPTXWriter:
 
         return tb
     
+    def _add_bpmn_parallel_gateway_symbol(self, slide, shape: ShapeElement):
+        """Add plus sign overlay for BPMN parallel gateway using lines (not text)"""
+        # Calculate center position and size for the plus sign
+        # Use approximately 100% of the shape's smaller dimension for the plus sign size
+        # (Decision図形に対して100%の大きさにする)
+        symbol_size = min(shape.w, shape.h) * 1.0
+        center_x = shape.x + shape.w / 2.0
+        center_y = shape.y + shape.h / 2.0
+        
+        # Get stroke color from shape (or use black as default)
+        stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
+        
+        # Calculate line width (use fixed thickness for visibility)
+        # Force 2pt as requested
+        line_width_pt = 2.0
+        
+        # Calculate half length of the plus sign lines
+        half_length = symbol_size * 0.25  # 25% of symbol size for each half (1.25x)
+        
+        # Add horizontal line (横線)
+        h_line = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            px_to_emu(center_x - half_length),
+            px_to_emu(center_y),
+            px_to_emu(center_x + half_length),
+            px_to_emu(center_y),
+        )
+        
+        # Add vertical line (縦線)
+        v_line = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            px_to_emu(center_x),
+            px_to_emu(center_y - half_length),
+            px_to_emu(center_x),
+            px_to_emu(center_y + half_length),
+        )
+        
+        # Set line properties for horizontal line
+        try:
+            h_line.line.fill.solid()
+            self._set_edge_stroke_color_xml(h_line, stroke_color)
+            h_line.line.width = Pt(line_width_pt)
+            # Remove arrowheads via XML
+            self._remove_arrowheads_xml(h_line)
+            # Disable shadow on the plus sign lines
+            h_line.shadow.inherit = False
+            self._disable_shadow_xml(h_line)
+            # Remove effectRef on connector style (prevents theme shadow)
+            self._remove_effect_ref_xml(h_line)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set horizontal line properties: {e}")
+        
+        # Set name for horizontal line
+        try:
+            if shape.id:
+                h_line.name = f"drawio2pptx:bpmn-symbol-h:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set horizontal line name: {e}")
+        
+        # Set line properties for vertical line
+        try:
+            v_line.line.fill.solid()
+            self._set_edge_stroke_color_xml(v_line, stroke_color)
+            v_line.line.width = Pt(line_width_pt)
+            # Remove arrowheads via XML
+            self._remove_arrowheads_xml(v_line)
+            # Disable shadow on the plus sign lines
+            v_line.shadow.inherit = False
+            self._disable_shadow_xml(v_line)
+            # Remove effectRef on connector style (prevents theme shadow)
+            self._remove_effect_ref_xml(v_line)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set vertical line properties: {e}")
+        
+        # Set name for vertical line
+        try:
+            if shape.id:
+                v_line.name = f"drawio2pptx:bpmn-symbol-v:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set vertical line name: {e}")
+    
     def _add_orthogonal_connector(self, slide, connector: ConnectorElement):
         """Add polyline as straight connectors for each segment"""
         if not connector.points or len(connector.points) < 2:
@@ -628,6 +775,7 @@ class PPTXWriter:
                 points_for_segments = self._trim_polyline_endpoints_px(points_for_segments, start_trim, end_trim)
             except Exception:
                 points_for_segments = list(connector.points)
+        points_for_segments = self._dedupe_polyline_points(points_for_segments)
         
         # Split polyline into segments
         segments = split_polyline_to_segments(points_for_segments)
@@ -928,6 +1076,35 @@ class PPTXWriter:
         if len(pts) < 2:
             return list(points)
         return pts
+
+    @staticmethod
+    def _dedupe_polyline_points(
+        points: List[Tuple[float, float]],
+        eps: float = 1e-6,
+    ) -> List[Tuple[float, float]]:
+        """Remove consecutive near-duplicate points to avoid zero-length segments."""
+        if not points or len(points) < 2:
+            return points
+
+        def dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+            dx = b[0] - a[0]
+            dy = b[1] - a[1]
+            return (dx * dx + dy * dy) ** 0.5
+
+        filtered = [points[0]]
+        for p in points[1:-1]:
+            if dist(filtered[-1], p) > eps:
+                filtered.append(p)
+
+        last = points[-1]
+        if dist(filtered[-1], last) <= eps:
+            filtered[-1] = last
+        else:
+            filtered.append(last)
+
+        if len(filtered) < 2:
+            return [points[0], points[-1]]
+        return filtered
 
     def _set_no_fill_xml(self, shape):
         """Force <a:noFill/> on the shape fill (spPr) via XML."""
@@ -1574,6 +1751,49 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set arrow XML: {e}")
+    
+    def _remove_arrowheads_xml(self, shape):
+        """Remove arrowheads from a connector line via XML"""
+        try:
+            if not hasattr(shape, '_element'):
+                return
+            
+            shape_element = shape._element
+            
+            # Find ln (line) element
+            ln_element = shape_element.find('.//a:ln', namespaces=NSMAP_DRAWINGML)
+            if ln_element is None:
+                return
+            
+            # Remove existing arrows
+            for head_end in ln_element.findall('.//a:headEnd', namespaces=NSMAP_DRAWINGML):
+                ln_element.remove(head_end)
+            for tail_end in ln_element.findall('.//a:tailEnd', namespaces=NSMAP_DRAWINGML):
+                ln_element.remove(tail_end)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to remove arrowheads XML: {e}")
+
+    def _remove_effect_ref_xml(self, shape):
+        """Remove effectRef from connector style to avoid theme shadow."""
+        try:
+            if not hasattr(shape, '_element'):
+                return
+            shape_element = shape._element
+            # Remove any effectRef elements (namespace-agnostic)
+            for effect_ref in list(shape_element.iter()):
+                if effect_ref.tag.endswith('effectRef'):
+                    parent = effect_ref.getparent()
+                    if parent is not None:
+                        parent.remove(effect_ref)
+            # Remove p:style blocks on connectors to avoid theme effects
+            for style in shape_element.findall('.//p:style', namespaces=NSMAP_BOTH):
+                parent = style.getparent()
+                if parent is not None:
+                    parent.remove(style)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to remove effectRef XML: {e}")
     
     def _disable_shadow_xml(self, shape):
         """Disable shadow via XML (similar to legacy _disable_shadow_xml)"""

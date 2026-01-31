@@ -35,6 +35,7 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     'predefinedprocess': MSO_SHAPE.FLOWCHART_PREDEFINED_PROCESS,
     'predefined_process': MSO_SHAPE.FLOWCHART_PREDEFINED_PROCESS,
     'predefined-process': MSO_SHAPE.FLOWCHART_PREDEFINED_PROCESS,
+    'decision': MSO_SHAPE.FLOWCHART_DECISION,
     # Polygon shapes
     'hexagon': MSO_SHAPE.HEXAGON,
     'pentagon': MSO_SHAPE.REGULAR_PENTAGON,
