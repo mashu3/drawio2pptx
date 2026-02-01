@@ -25,6 +25,7 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     # Flowchart shapes
     'document': MSO_SHAPE.FLOWCHART_DOCUMENT,
     'tape': MSO_SHAPE.FLOWCHART_PUNCHED_TAPE,
+    'data': MSO_SHAPE.FLOWCHART_DATA,
     'datastorage': MSO_SHAPE.FLOWCHART_STORED_DATA,
     'data_storage': MSO_SHAPE.FLOWCHART_STORED_DATA,
     'data-storage': MSO_SHAPE.FLOWCHART_STORED_DATA,

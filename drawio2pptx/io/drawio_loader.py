@@ -116,6 +116,7 @@ class StyleExtractor:
         'mxgraph.basic.smiley': 'smiley',
         # mxgraph.flowchart shapes
         'mxgraph.flowchart.decision': 'decision',
+        'mxgraph.flowchart.data': 'data',
         # mxgraph.bpmn shapes (gateways are typically diamond-shaped)
         'mxgraph.bpmn.shape': 'rhombus',
     }
@@ -286,6 +287,25 @@ class StyleExtractor:
             return None
         value = self.extract_style_value(style, "gradientDirection")
         return value.strip() if value else None
+
+    def extract_swimlane_fill_color(self, cell: ET.Element) -> Optional[Any]:
+        """
+        Extract swimlaneFillColor (body area fill). Header uses fillColor.
+        Returns: RGBColor, "default", or None (treated as white).
+        """
+        style = cell.attrib.get("style", "")
+        if not style:
+            return None
+        value = self.extract_style_value(style, "swimlaneFillColor")
+        if not value:
+            return None
+        value_lower = value.strip().lower()
+        if value_lower in ["default", "auto"]:
+            return "default"
+        if value_lower == "none":
+            return None
+        parsed = self.color_parser.parse(value.strip())
+        return parsed
     
     def extract_stroke_color(self, cell: ET.Element) -> Optional[RGBColor]:
         """Extract strokeColor"""
@@ -860,6 +880,7 @@ class DrawIOLoader:
                     style.swimlane_line = True
                 else:
                     style.swimlane_line = swimlane_line_str.strip() != "0"
+                style.swimlane_fill_color = self.style_extractor.extract_swimlane_fill_color(cell)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to extract swimlane metadata: {e}")

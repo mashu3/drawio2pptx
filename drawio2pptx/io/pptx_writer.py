@@ -192,37 +192,45 @@ class PPTXWriter:
         
         # Set fill
         fill_color = shape.style.fill
-        if fill_color == "default":
-            self._set_default_fill_xml(shp)
-        elif fill_color:
-            try:
-                shp.fill.solid()
-                shp.fill.fore_color.rgb = fill_color
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set fill color: {e}")
+        is_swimlane = getattr(shape.style, "is_swimlane", False)
+        swimlane_start = float(getattr(shape.style, "swimlane_start_size", 0) or 0)
+
+        if is_swimlane and swimlane_start > 0 and shape.h > 0:
+            # Swimlane: header = fillColor, body = swimlaneFillColor. Use gradient to paint header only.
+            self._set_swimlane_gradient_fill_xml(shp, shape)
         else:
-            try:
-                shp.fill.background()
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set background fill: {e}")
+            if fill_color == "default":
+                self._set_default_fill_xml(shp)
+            elif fill_color:
+                try:
+                    shp.fill.solid()
+                    shp.fill.fore_color.rgb = fill_color
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to set fill color: {e}")
+            else:
+                try:
+                    shp.fill.background()
+                except Exception as e:
+                    if self.logger:
+                        self.logger.debug(f"Failed to set background fill: {e}")
 
         # Gradient fill (draw.io: gradientColor/gradientDirection)
-        # Apply after the base fill so we can safely override the fill XML.
-        try:
-            grad_color = getattr(shape.style, "gradient_color", None)
-            grad_dir = getattr(shape.style, "gradient_direction", None)
-            if grad_color:
-                self._set_linear_gradient_fill_xml(
-                    shp,
-                    base_fill=fill_color,
-                    gradient_color=grad_color,
-                    gradient_direction=grad_dir,
-                )
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set gradient fill: {e}")
+        # Skip for swimlane (already handled by _set_swimlane_gradient_fill_xml).
+        if not (is_swimlane and swimlane_start > 0):
+            try:
+                grad_color = getattr(shape.style, "gradient_color", None)
+                grad_dir = getattr(shape.style, "gradient_direction", None)
+                if grad_color:
+                    self._set_linear_gradient_fill_xml(
+                        shp,
+                        base_fill=fill_color,
+                        gradient_color=grad_color,
+                        gradient_direction=grad_dir,
+                    )
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set gradient fill: {e}")
         
         # Set stroke
         if getattr(shape.style, "no_stroke", False):
@@ -1572,6 +1580,89 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set default fill XML: {e}")
+
+    def _set_swimlane_gradient_fill_xml(self, shp, shape: ShapeElement) -> None:
+        """
+        Set swimlane fill: header = fillColor, body = swimlaneFillColor.
+        Uses a multi-stop gradient so only the header area is colored; body stays white/transparent.
+        """
+        def _rgb_to_hex(rgb: RGBColor) -> str:
+            return f"{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"
+
+        try:
+            if not hasattr(shp, "_element"):
+                return
+            shape_element = shp._element
+            sp_pr = None
+            for child in shape_element:
+                if child.tag.endswith("}spPr") or "spPr" in child.tag:
+                    sp_pr = child
+                    break
+            if sp_pr is None:
+                sp_pr = shape_element.find(".//a:spPr", namespaces=NSMAP_DRAWINGML)
+            if sp_pr is None:
+                return
+
+            start_size = float(getattr(shape.style, "swimlane_start_size", 0) or 0.0)
+            is_horizontal = bool(getattr(shape.style, "swimlane_horizontal", True))
+            header_color = shape.style.fill
+            body_color = getattr(shape.style, "swimlane_fill_color", None)
+            if isinstance(header_color, RGBColor):
+                header_rgb = header_color
+            else:
+                header_rgb = RGBColor(0xE0, 0xE0, 0xE0)
+            if isinstance(body_color, RGBColor):
+                body_rgb = body_color
+            elif body_color in ("default", "auto"):
+                body_rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            else:
+                body_rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+            if is_horizontal and shape.h > 0:
+                ratio = min(1.0, max(0.0, start_size / shape.h))
+                pos_header = int(ratio * 100000)
+                ang = "5400000"  # 90 degrees, top to bottom
+            else:
+                if shape.w > 0:
+                    ratio = min(1.0, max(0.0, start_size / shape.w))
+                else:
+                    ratio = 0.0
+                pos_header = int(ratio * 100000)
+                ang = "0"  # 0 degrees, left to right
+
+            # Exactly 2 stops on the divider line (e.g. 50%); distance between them almost 0.
+            # Before first stop = header, between = tiny blend, after second = body.
+            pos_header = min(max(0, pos_header), 100000)
+            pos1 = max(0, pos_header - 1)
+            pos2 = min(100000, pos_header + 1)
+
+            for tag in ("noFill", "solidFill", "gradFill", "pattFill", "blipFill"):
+                for elem in sp_pr.findall(f".//a:{tag}", namespaces=NSMAP_DRAWINGML):
+                    try:
+                        sp_pr.remove(elem)
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.debug(f"Failed to remove fill element {tag}: {e}")
+
+            grad_fill = ET.SubElement(sp_pr, _a("gradFill"))
+            grad_fill.set("rotWithShape", "1")
+            gs_lst = ET.SubElement(grad_fill, _a("gsLst"))
+
+            # Stop 1: just above divider → header (extends to 0%)
+            gs1 = ET.SubElement(gs_lst, _a("gs"))
+            gs1.set("pos", str(pos1))
+            ET.SubElement(gs1, _a("srgbClr")).set("val", _rgb_to_hex(header_rgb))
+            # Stop 2: just below divider → body (extends to 100%); distance to pos1 ≈ 0
+            gs2 = ET.SubElement(gs_lst, _a("gs"))
+            gs2.set("pos", str(pos2))
+            ET.SubElement(gs2, _a("srgbClr")).set("val", _rgb_to_hex(body_rgb))
+
+            lin = ET.SubElement(grad_fill, _a("lin"))
+            lin.set("ang", ang)
+            lin.set("scaled", "1")
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set swimlane gradient fill: {e}")
 
     def _set_linear_gradient_fill_xml(
         self,

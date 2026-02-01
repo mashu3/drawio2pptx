@@ -73,11 +73,13 @@ class Style:
     # Text wrapping (draw.io: whiteSpace=wrap/nowrap). True for wrap, False for nowrap.
     # Default is True (wrap) to match draw.io's default behavior.
     word_wrap: bool = True
-    # Swimlane/container metadata (draw.io: swimlane; startSize; horizontal)
+    # Swimlane/container metadata (draw.io: swimlane; startSize; horizontal; swimlaneFillColor)
     is_swimlane: bool = False
     swimlane_start_size: Optional[float] = None  # px
     swimlane_horizontal: Optional[bool] = None
     swimlane_line: Optional[bool] = None
+    # Body fill color (draw.io: swimlaneFillColor). Header uses fillColor; body uses this. None = white.
+    swimlane_fill_color: Optional[Union[RGBColor, str]] = None
     # Explicitly disable stroke (e.g. draw.io text shapes, strokeColor=none)
     no_stroke: bool = False
     # BPMN symbol (e.g., 'parallelGw' for parallel gateway)
