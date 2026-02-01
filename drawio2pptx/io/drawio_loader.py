@@ -443,6 +443,16 @@ class StyleExtractor:
                     bg_outline = self.extract_style_value(style, "backgroundOutline")
                     if (bg_outline or "").strip() == "1":
                         return "predefinedprocess"
+                    # Some diagrams.net exports omit backgroundOutline for predefined process,
+                    # but keep a non-zero "size" parameter. Treat it as predefined process
+                    # to better match the expected appearance in PowerPoint.
+                    size_value = self.extract_style_value(style, "size")
+                    if size_value is not None:
+                        try:
+                            if float(size_value) > 0:
+                                return "predefinedprocess"
+                        except ValueError:
+                            pass
                 except Exception as e:
                     if self.logger:
                         self.logger.debug(f"Failed to check backgroundOutline: {e}")
@@ -462,9 +472,11 @@ class StyleExtractor:
             normalized = self._SHAPE_TYPE_MAP.get(first_part)
             if normalized:
                 return normalized
-            # Keep rhombus as-is
+            # Keep rhombus/process as-is (process not in _SHAPE_TYPE_MAP key; value is mxgraph.flowchart.process)
             if first_part == "rhombus":
                 return "rhombus"
+            if first_part == "process":
+                return "process"
 
         return "rectangle"
 
@@ -1319,6 +1331,42 @@ class DrawIOLoader:
                 implied_entry_side = _infer_port_side(auto_entry_x, auto_entry_y)
                 if implied_entry_side and declared_entry_side != implied_entry_side:
                     entry_x, entry_y = auto_entry_x, auto_entry_y
+
+            # For orthogonal edges with waypoints, project the first/last waypoint onto the
+            # source/target boundary so the connector starts (ends) exactly above/below or
+            # beside the bend, not at the center of the edge. This preserves "straight down
+            # then right" instead of "diagonal from center to waypoint".
+            if edge_style == "orthogonal" and points_for_ports:
+                first_pt = points_for_ports[0]
+                last_pt = points_for_ports[-1]
+                exit_side = _infer_port_side(exit_x, exit_y)
+                entry_side = _infer_port_side(entry_x, entry_y)
+                if exit_side and source_shape.w and source_shape.h:
+                    if exit_side == "bottom":
+                        exit_x = _clamp01((first_pt[0] - source_shape.x) / source_shape.w)
+                        exit_y = 1.0
+                    elif exit_side == "top":
+                        exit_x = _clamp01((first_pt[0] - source_shape.x) / source_shape.w)
+                        exit_y = 0.0
+                    elif exit_side == "right":
+                        exit_x = 1.0
+                        exit_y = _clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                    elif exit_side == "left":
+                        exit_x = 0.0
+                        exit_y = _clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                if entry_side and target_shape.w and target_shape.h:
+                    if entry_side == "bottom":
+                        entry_x = _clamp01((last_pt[0] - target_shape.x) / target_shape.w)
+                        entry_y = 1.0
+                    elif entry_side == "top":
+                        entry_x = _clamp01((last_pt[0] - target_shape.x) / target_shape.w)
+                        entry_y = 0.0
+                    elif entry_side == "right":
+                        entry_x = 1.0
+                        entry_y = _clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+                    elif entry_side == "left":
+                        entry_x = 0.0
+                        entry_y = _clamp01((last_pt[1] - target_shape.y) / target_shape.h)
 
             # Calculate connection points
             source_x, source_y = self._calculate_boundary_point(
