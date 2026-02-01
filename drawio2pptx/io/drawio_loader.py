@@ -117,6 +117,13 @@ class StyleExtractor:
         # mxgraph.flowchart shapes
         'mxgraph.flowchart.decision': 'decision',
         'mxgraph.flowchart.data': 'data',
+        'mxgraph.flowchart.document': 'document',
+        'mxgraph.flowchart.process': 'process',
+        'mxgraph.flowchart.predefined_process': 'predefinedprocess',
+        'mxgraph.flowchart.paper_tape': 'tape',
+        'mxgraph.flowchart.manual_input': 'manualinput',
+        'mxgraph.flowchart.extract': 'extract',
+        'mxgraph.flowchart.merge_or_storage': 'merge',
         # mxgraph.bpmn shapes (gateways are typically diamond-shaped)
         'mxgraph.bpmn.shape': 'rhombus',
     }
@@ -1789,8 +1796,10 @@ class DrawIOLoader:
         base_y = shape.y + shape.h * rel_y
 
         # Apply correction for special shapes
-        if "parallelogram" in shape_type:
-            # For parallelograms, rel_x/rel_y often refers to "position on edge" (e.g., exitX=1, exitY=0.5 is the midpoint of the right edge).
+        # Parallelogram and flowchart Data (input/output) both have slanted left/right edges.
+        # Use the same edge interpolation so connectors attach on the actual slant, not the bounding box.
+        if "parallelogram" in shape_type or "data" in shape_type:
+            # For parallelograms (and Data), rel_x/rel_y often refers to "position on edge" (e.g., exitX=1, exitY=0.5 is the midpoint of the right edge).
             # If processed with nearest neighbor projection, it may deviate from the midpoint (especially on left/right edges), resulting in appearing "inside the edge".
             # Therefore, for boundary specifications (rel_x/rel_y near 0/1), use linear interpolation on the corresponding edge to ensure it is always on the edge.
             #

@@ -195,8 +195,10 @@ class PPTXWriter:
         is_swimlane = getattr(shape.style, "is_swimlane", False)
         swimlane_start = float(getattr(shape.style, "swimlane_start_size", 0) or 0)
 
-        if is_swimlane and swimlane_start > 0 and shape.h > 0:
-            # Swimlane: header = fillColor, body = swimlaneFillColor. Use gradient to paint header only.
+        # Swimlane gradient only when fillColor is explicit (e.g. flowchart3). Do not apply when
+        # fillColor is omitted (e.g. flowchart2 Pool/Lane) to avoid unwanted gradient.
+        if is_swimlane and swimlane_start > 0 and shape.h > 0 and isinstance(fill_color, RGBColor):
+            # Swimlane with explicit fillColor: header = fillColor, body = swimlaneFillColor.
             self._set_swimlane_gradient_fill_xml(shp, shape)
         else:
             if fill_color == "default":
@@ -215,23 +217,9 @@ class PPTXWriter:
                     if self.logger:
                         self.logger.debug(f"Failed to set background fill: {e}")
 
-        # Gradient fill (draw.io: gradientColor/gradientDirection)
-        # Skip for swimlane (already handled by _set_swimlane_gradient_fill_xml).
-        if not (is_swimlane and swimlane_start > 0):
-            try:
-                grad_color = getattr(shape.style, "gradient_color", None)
-                grad_dir = getattr(shape.style, "gradient_direction", None)
-                if grad_color:
-                    self._set_linear_gradient_fill_xml(
-                        shp,
-                        base_fill=fill_color,
-                        gradient_color=grad_color,
-                        gradient_direction=grad_dir,
-                    )
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set gradient fill: {e}")
-        
+        # Gradient fill: only used for swimlane header vs body (_set_swimlane_gradient_fill_xml above).
+        # Do not apply draw.io gradientColor/gradientDirection to normal shapes to avoid unwanted gradient.
+        #
         # Set stroke
         if getattr(shape.style, "no_stroke", False):
             try:
