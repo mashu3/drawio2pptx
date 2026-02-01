@@ -20,34 +20,28 @@ drawio2pptx is a Python package that converts draw.io (diagrams.net) files to Po
 ### 🔧 Core Functionality
 - ✅ Convert draw.io files (.drawio, .xml) to PowerPoint (.pptx)
 - ✅ **One file = One presentation**: One draw.io file becomes one PowerPoint presentation
-- ✅ **One page/diagram = One slide**: Each page/diagram in a draw.io file becomes a separate slide
+- ✅ **One page/diagram = One slide**: Each page/diagram becomes a separate slide
 - ✅ Support for multiple pages/diagrams in a single file
 - ✅ Automatic page size configuration (pageWidth, pageHeight)
+- ✅ Z-order preserved (shapes and connectors drawn in draw.io order; connectors kept above endpoints when needed)
 
 ### 🔷 Shape Support
-- **Basic shapes**: Rectangle, Square, Ellipse, Circle, Rounded Rectangle
-- **Polygons**: Triangle, Right Triangle, Hexagon, Octagon, Pentagon, Rhombus, Parallelogram, Trapezoid, Star (4/5/6/8-point)
-- **3D shapes**: Cylinder
-- **Flowchart shapes**: Process, Decision, Document, Predefined Process, Internal Storage, Punched Tape, Stored Data, Cloud
-- **Connectors/Edges**: Straight lines, Orthogonal connectors with arrow support
+- **Basic**: Rectangle, Square, Ellipse, Circle, Rounded Rectangle, Triangle (isosceles), Right Triangle, Hexagon, Octagon, Pentagon, Rhombus, Parallelogram, Trapezoid, Star (4/5/6/8-point), Smiley
+- **3D**: Cylinder
+- **Special**: Cloud, Swimlane (horizontal/vertical with header), BPMN (rhombus / parallel gateway)
+- **Flowchart**: Process, Decision, Data, Document, Predefined Process, Internal Storage, Punched Tape, Stored Data, Manual Input, Extract, Merge
+- **Connectors**: Straight and orthogonal (elbow) lines; connection points (exit/entry); line styles (dashed, dotted, etc.); arrows (type, size, fill; open oval supported)
 
 ### 🎨 Styling & Formatting
-- **Colors**: Hexadecimal (#RRGGBB), Short hex (#RGB), RGB format, light-dark format
-- **Fill**: Solid colors, gradients, transparent, default theme colors
+- **Colors**: Hex (#RRGGBB, #RGB), RGB, light-dark format
+- **Fill**: Solid, gradient, transparent, default theme; corner radius (rounded rectangles)
 - **Stroke**: Color, width, styles (solid, dashed, dotted, dash-dot, dash-dot-dot)
-- **Text**: Font size, family, style (bold, italic, underline), alignment (horizontal/vertical), padding, wrapping
-- **Effects**: Shadow support, text background color (highlight)
-
-### 📝 Text Support
-- Plain text and rich text (partial HTML format: font, b, i, u, strong, em tags)
-- Text line breaks
-- Font color extraction from style attributes and HTML tags
+- **Text**: Font size, family, bold/italic/underline, horizontal/vertical alignment, padding, wrapping; plain and rich text (HTML: font, b, i, u, strong, em); line breaks; font color from style/HTML
+- **Effects**: Shadow, text background color (highlight)
 
 ### 📊 Feature Status
 
-This project is under active development. The core conversion functionality is working, and many basic shapes and styling features are supported.
-
-For a detailed checklist of implemented and planned features, see [FEATURES.md](FEATURES.md).
+This project is in **alpha** and under active development. For a detailed checklist of implemented and planned features, see [FEATURES.md](FEATURES.md).
 
 ---
 
@@ -128,7 +122,9 @@ respective owners.
 
 ## 🤝 Contributing
 
-Bug reports and feature requests are welcome. Please open an issue on the repository.
+Issues are welcome and encouraged for reporting bugs, proposing features, or sharing ideas.
+
+Currently, pull requests are not accepted, as development is being handled solely by the maintainer.
 
 ---
 

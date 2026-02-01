@@ -15,6 +15,7 @@ This document provides a detailed checklist of implemented and planned features 
 
 - [x] Support for multiple diagrams (each diagram becomes a separate slide)
 - [x] Automatic page size configuration (pageWidth, pageHeight)
+- [x] Z-order / stacking order (shapes and connectors drawn in draw.io document order; connectors kept above endpoint shapes when needed)
 - [ ] Page orientation (landscape/portrait)
 - [ ] Page margin settings
 - [ ] Page background color
@@ -209,6 +210,7 @@ This document provides a detailed checklist of implemented and planned features 
 - [x] Trapezoid (TRAPEZOID / trapezoid)
 - [x] Pentagon (PENTAGON / pentagon)
 - [x] Star (STAR / star) - 4-point, 5-point, 6-point, 8-point star support
+- [x] Smiley (smiley / mxgraph.basic.smiley)
 - [ ] Cross (CROSS / cross)
 - [ ] Plus (PLUS / plus)
 - [ ] Arrow (ARROW / arrow)
@@ -224,6 +226,7 @@ This document provides a detailed checklist of implemented and planned features 
 ### Special Shapes
 
 - [x] Cloud (CLOUD / cloud)
+- [x] BPMN shape (mxgraph.bpmn.shape) - rendered as rhombus; parallel gateway symbol (parallelGw) supported
 - [ ] Actor (ACTOR / actor)
 - [ ] Text label (TEXT / text)
 - [ ] Image (IMAGE / image)
@@ -234,14 +237,14 @@ This document provides a detailed checklist of implemented and planned features 
 
 - [x] Process (process)
 - [x] Decision (decision / diamond) - processed as rhombus
-- [ ] Data (data)
+- [x] Data (data / mxgraph.flowchart.data)
 - [x] Document (document)
 - [ ] Multi-document (multiDocument)
 - [x] Predefined process (predefinedProcess)
 - [x] Internal storage (internalStorage)
 - [ ] Sequential data (sequentialData)
 - [ ] Direct access storage (directAccessStorage)
-- [ ] Manual input (manualInput)
+- [x] Manual input (manualInput / mxgraph.flowchart.manual_input)
 - [ ] Manual operation (manualOperation)
 - [ ] Preparation (preparation)
 - [ ] Connector (connector)
@@ -252,8 +255,8 @@ This document provides a detailed checklist of implemented and planned features 
 - [ ] OR (or)
 - [ ] Collate (collate)
 - [ ] Sort (sort)
-- [ ] Extract (extract)
-- [ ] Merge (merge)
+- [x] Extract (extract / mxgraph.flowchart.extract)
+- [x] Merge (merge / mxgraph.flowchart.merge_or_storage)
 - [ ] Offline storage (offlineStorage)
 - [ ] Online storage (onlineStorage)
 - [ ] Magnetic tape (magneticTape)
@@ -268,8 +271,8 @@ This document provides a detailed checklist of implemented and planned features 
 - [x] Basic connector/edge support
 - [x] Straight line (straight) - basic implementation
 - [x] Orthogonal (orthogonal) - basic implementation
-- [ ] Curved line (curved) - not supported
-- [ ] Elbow connector (elbow) - not supported
+- [x] Elbow connector (elbow) - processed as orthogonal
+- [ ] Curved line (curved) - not supported (converted to straight polyline)
 - [x] Line styles (dashed, dotted, etc.) - basic implementation
 - [x] Connection point settings
   - [x] Start connection point (exitX, exitY, exitDx, exitDy)
@@ -278,12 +281,13 @@ This document provides a detailed checklist of implemented and planned features 
 - [x] Line color (strokeColor)
 - [x] Line width (strokeWidth)
 - [x] Shadow settings (shadow=0/1)
-- [x] Arrow settings (basic implementation)
+- [x] Arrow settings
   - [x] Start arrow (startArrow)
   - [x] End arrow (endArrow)
-  - [x] Arrow fill settings (startFill, endFill)
-  - [x] Arrow type mapping (triangle, oval, diamond, etc.)
-  - [⚠️] Arrow rendering for straight lines may not work perfectly (some arrow types may not display as expected)
+  - [x] Arrow fill settings (startFill, endFill); open oval (startFill/endFill=0) emulated with overlay shape
+  - [x] Arrow size (startSize/endSize) mapped to PowerPoint sm/med/lg
+  - [x] Default end arrow when mxGraphModel arrows=1 and endArrow omitted (classic)
+  - [x] Arrow type mapping (triangle, oval, diamond, open, stealth, etc.)
 - [ ] Labeled connectors
 
 ### Other Shapes
@@ -297,6 +301,12 @@ This document provides a detailed checklist of implemented and planned features 
 - [ ] Shape combination (Union, Subtract, Intersect, Exclude)
 
 ## Other Features
+
+### Z-order & Stacking
+
+- [x] Draw order from mxGraphModel (document / parent-child traversal)
+- [x] Connectors drawn above endpoint shapes when edge order would otherwise place them behind
+- [x] Connector labels keep same z-index as connector
 
 ### Grouping & Layers
 
@@ -315,7 +325,7 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Links & Hyperlinks
 
-- [ ] Link (link)
+- [ ] Link (link) — intermediate model has TextRun.link; not yet applied in PPTX output
 - [ ] Hyperlink (hyperlink)
 - [ ] Internal links (links to pages within the same file)
 - [ ] External links (URLs)
@@ -336,7 +346,7 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Images & Media
 
-- [ ] Image embedding (image)
+- [ ] Image embedding (image) — intermediate model and media utils exist; ImageElement not yet written to PPTX
 - [ ] Image size adjustment
 - [ ] Image aspect ratio maintenance
 - [ ] SVG image support
