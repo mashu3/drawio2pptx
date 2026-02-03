@@ -19,6 +19,7 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     'parallelogram': MSO_SHAPE.PARALLELOGRAM,
     'cloud': MSO_SHAPE.CLOUD,
     'trapezoid': MSO_SHAPE.TRAPEZOID,
+    'step': MSO_SHAPE.CHEVRON,
     # 3D shapes
     'cylinder3': MSO_SHAPE.CAN,
     'cylinder': MSO_SHAPE.CAN,

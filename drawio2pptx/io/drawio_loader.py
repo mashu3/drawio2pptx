@@ -945,6 +945,15 @@ class DrawIOLoader:
             if min(w, h) > 0:
                 corner_radius = min(w, h) * 0.1
         
+        # Extract step size (draw.io style: size) for step shapes
+        step_size = None
+        try:
+            if shape_type and shape_type.lower() == "step":
+                step_size = self.style_extractor.extract_style_float(style_str, "size")
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to extract step size: {e}")
+
         # Extract text
         text_paragraphs = self._extract_text(text_raw, font_color, style_str)
         
@@ -962,6 +971,7 @@ class DrawIOLoader:
             word_wrap=word_wrap,
             no_stroke=no_stroke,
             bpmn_symbol=bpmn_symbol,
+            step_size_px=step_size,
         )
 
         # Swimlane/container metadata (used for header layout in PPTX)

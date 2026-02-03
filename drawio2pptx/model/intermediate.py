@@ -84,6 +84,8 @@ class Style:
     no_stroke: bool = False
     # BPMN symbol (e.g., 'parallelGw' for parallel gateway)
     bpmn_symbol: Optional[str] = None
+    # draw.io "step" shape size (style key: size), used for chevron inset
+    step_size_px: Optional[float] = None
 
 
 @dataclass
