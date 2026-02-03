@@ -12,7 +12,7 @@ from lxml import html as lxml_html
 from pptx.dml.color import RGBColor  # type: ignore[import]
 
 from ..model.intermediate import (
-    ShapeElement, ConnectorElement, BaseElement, TextElement,
+    ShapeElement, ConnectorElement, BaseElement, TextElement, PolygonElement,
     Transform, Style, TextParagraph, TextRun
 )
 from ..logger import ConversionLogger
@@ -719,10 +719,89 @@ class DrawIOLoader:
                             label.z_index = connector.z_index
                             elements.append(label)
         
+        # If the entire diagram is off the page, normalize to the page origin.
+        self._maybe_normalize_page_offset(elements, mgm_root)
+
         # Sort by Z-order
         elements.sort(key=lambda e: e.z_index)
         
         return elements
+
+    def _maybe_normalize_page_offset(self, elements: List[BaseElement], mgm_root: ET.Element) -> None:
+        """Shift diagram to page origin when content is fully outside the page."""
+        if not elements:
+            return
+
+        page_width, page_height = self.extract_page_size(mgm_root)
+        if page_width is None or page_height is None:
+            return
+
+        bounds = self._get_elements_bounds(elements)
+        if bounds is None:
+            return
+
+        min_x, min_y, max_x, max_y = bounds
+        # Only shift when the entire diagram is outside the page rectangle.
+        if max_x < 0 or max_y < 0 or min_x > page_width or min_y > page_height:
+            width = max_x - min_x
+            height = max_y - min_y
+            if width <= page_width:
+                offset_x = (page_width - width) / 2.0 - min_x
+            else:
+                offset_x = -min_x
+            if height <= page_height:
+                offset_y = (page_height - height) / 2.0 - min_y
+            else:
+                offset_y = -min_y
+            self._apply_translation(elements, offset_x, offset_y)
+            if self.logger:
+                self.logger.debug(
+                    f"Applied page offset normalization: ({offset_x:.2f}, {offset_y:.2f})"
+                )
+
+    def _get_elements_bounds(self, elements: List[BaseElement]) -> Optional[tuple[float, float, float, float]]:
+        """Compute bounding box for a list of elements."""
+        min_x = float("inf")
+        min_y = float("inf")
+        max_x = float("-inf")
+        max_y = float("-inf")
+
+        for element in elements:
+            bounds = self._get_element_bounds(element)
+            if bounds is None:
+                continue
+            e_min_x, e_min_y, e_max_x, e_max_y = bounds
+            min_x = min(min_x, e_min_x)
+            min_y = min(min_y, e_min_y)
+            max_x = max(max_x, e_max_x)
+            max_y = max(max_y, e_max_y)
+
+        if min_x == float("inf"):
+            return None
+
+        return (min_x, min_y, max_x, max_y)
+
+    def _get_element_bounds(self, element: BaseElement) -> Optional[tuple[float, float, float, float]]:
+        """Get bounding box for a single element."""
+        if isinstance(element, (ConnectorElement, PolygonElement)) and element.points:
+            xs = [p[0] for p in element.points]
+            ys = [p[1] for p in element.points]
+            return (min(xs), min(ys), max(xs), max(ys))
+
+        x0, y0 = element.x, element.y
+        x1, y1 = x0 + element.w, y0 + element.h
+        return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+    def _apply_translation(self, elements: List[BaseElement], dx: float, dy: float) -> None:
+        """Apply translation to element coordinates and point lists."""
+        if dx == 0 and dy == 0:
+            return
+
+        for element in elements:
+            element.x += dx
+            element.y += dy
+            if isinstance(element, (ConnectorElement, PolygonElement)) and element.points:
+                element.points = [(x + dx, y + dy) for x, y in element.points]
     
     def _get_parent_coordinates(self, parent_id: str, mgm_root: ET.Element) -> tuple[float, float]:
         """
@@ -853,6 +932,9 @@ class DrawIOLoader:
         word_wrap = True  # Default is wrap (draw.io's default)
         if white_space and white_space.lower() == "nowrap":
             word_wrap = False
+        # For draw.io text shapes, default behavior is no wrapping unless explicitly set.
+        if white_space is None and is_text_style:
+            word_wrap = False
         
         # Extract rounded attribute (corner radius)
         # draw.io: rounded=1 enables corner radius, rounded=0 disables it
@@ -924,14 +1006,8 @@ class DrawIOLoader:
         source_id = cell.attrib.get("source")
         target_id = cell.attrib.get("target")
         
-        if not source_id or not target_id:
-            return None, []
-        
-        source_shape = shapes_dict.get(source_id)
-        target_shape = shapes_dict.get(target_id)
-        
-        if not source_shape or not target_shape:
-            return None, []
+        source_shape = shapes_dict.get(source_id) if source_id else None
+        target_shape = shapes_dict.get(target_id) if target_id else None
         
         connector_id = cell.attrib.get("id")
         style_str = cell.attrib.get("style", "")
@@ -1046,6 +1122,74 @@ class DrawIOLoader:
                 source_point = (source_point[0] + parent_x, source_point[1] + parent_y)
             if target_point:
                 target_point = (target_point[0] + parent_x, target_point[1] + parent_y)
+
+        # Floating edges (no source/target shapes) are stored with sourcePoint/targetPoint.
+        # Preserve their geometry and arrow styles even without bound shapes.
+        if not source_shape or not target_shape:
+            points: List[tuple] = []
+            if source_point and target_point:
+                points = [source_point]
+                if points_raw:
+                    points.extend(points_raw)
+                points.append(target_point)
+            elif points_raw and len(points_raw) >= 2:
+                points = list(points_raw)
+            else:
+                return None, []
+
+            style = Style(
+                stroke=stroke_color,
+                stroke_width=stroke_width,
+                dash=dash_pattern,
+                arrow_start=start_arrow,
+                arrow_end=end_arrow,
+                arrow_start_fill=start_fill,
+                arrow_end_fill=end_fill,
+                arrow_start_size_px=start_size,
+                arrow_end_size_px=end_size,
+                has_shadow=has_shadow
+            )
+
+            connector = ConnectorElement(
+                id=connector_id,
+                source_id=source_id,
+                target_id=target_id,
+                points=points,
+                edge_style=edge_style,
+                style=style
+            )
+
+            # Extract label text (edge value)
+            labels: List[TextElement] = []
+            label_element = self._extract_connector_label(cell, connector, font_color, label_bg_color, style_str)
+            if label_element is not None:
+                labels.append(label_element)
+
+            # Edge labels can also be stored as child mxCell nodes (edgeLabel style).
+            if connector_id and mgm_root is not None:
+                try:
+                    child_cells = mgm_root.findall(f".//mxCell[@parent='{connector_id}']")
+                except Exception:
+                    child_cells = []
+                for label_cell in child_cells:
+                    if label_cell.attrib.get("vertex") != "1":
+                        continue
+                    style_val = label_cell.attrib.get("style", "") or ""
+                    is_edge_label = "edgeLabel" in style_val
+                    if not is_edge_label and label_cell.attrib.get("connectable") != "0":
+                        continue
+                    child_label = self._extract_edge_label_cell(
+                        label_cell=label_cell,
+                        connector=connector,
+                        default_font_color=font_color,
+                        default_label_bg_color=label_bg_color,
+                        source_shape=source_shape,
+                        target_shape=target_shape,
+                    )
+                    if child_label is not None:
+                        labels.append(child_label)
+
+            return connector, labels
 
         def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
             """
