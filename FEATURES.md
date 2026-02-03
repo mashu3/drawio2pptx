@@ -201,15 +201,16 @@ This document provides a detailed checklist of implemented and planned features 
   - [x] Processed as ellipse
   - [x] Fixed aspect ratio (aspect=fixed) support
 - [x] Rounded rectangle (rounded / rounded=1)
-- [x] Triangle (TRIANGLE / triangle) - isosceles triangle support
+- [x] Triangle (TRIANGLE / triangle) — isosceles triangle support
 - [x] Right triangle (rightTriangle)
+- [x] Step (step) — mapped to PowerPoint Chevron; step size (style `size`) supported
 - [x] Hexagon (HEXAGON / hexagon)
 - [x] Octagon (OCTAGON / octagon)
 - [x] Rhombus (RHOMBUS / rhombus)
 - [x] Parallelogram (PARALLELOGRAM / parallelogram)
 - [x] Trapezoid (TRAPEZOID / trapezoid)
 - [x] Pentagon (PENTAGON / pentagon)
-- [x] Star (STAR / star) - 4-point, 5-point, 6-point, 8-point star support
+- [x] Star (STAR / star) — 4-point, 5-point, 6-point, 8-point star support
 - [x] Smiley (smiley / mxgraph.basic.smiley)
 - [ ] Cross (CROSS / cross)
 - [ ] Plus (PLUS / plus)
