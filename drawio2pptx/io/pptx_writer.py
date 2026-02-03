@@ -122,6 +122,17 @@ class PPTXWriter:
         top = px_to_emu(shape.y)
         width = px_to_emu(shape.w)
         height = px_to_emu(shape.h)
+
+        # Slightly reduce step width to preserve the visual gap seen in draw.io.
+        try:
+            if (shape.shape_type or "").lower() == "step":
+                step_size = getattr(shape.style, "step_size_px", None)
+                if step_size is not None and shape.w > 0:
+                    gap_px = max(0.0, min(step_size * 0.1, shape.w * 0.3))
+                    width = px_to_emu(max(shape.w - gap_px, 1.0))
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to apply step gap: {e}")
         
         shp = slide.shapes.add_shape(
             pptx_shape_type,
@@ -144,6 +155,21 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set parallelogram adjustments: {e}")
+
+        # For draw.io step shapes (mapped to CHEVRON), honor the "size" parameter to relax the angle.
+        try:
+            if (shape.shape_type or "").lower() == "step" and hasattr(shp, "adjustments"):
+                if len(shp.adjustments) > 0:
+                    step_size = getattr(shape.style, "step_size_px", None)
+                    if step_size is not None and shape.w > 0:
+                        # PPTX chevron adjustment expects a fraction of width.
+                        adj = (step_size / float(shape.w)) * 1.5
+                        # Clamp to a reasonable range to avoid invalid geometry.
+                        adj = max(0.02, min(0.6, adj))
+                        shp.adjustments[0] = float(adj)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set step chevron adjustment: {e}")
         
         # Set text
         if shape.text:
