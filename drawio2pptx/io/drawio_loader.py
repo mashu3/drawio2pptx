@@ -2353,7 +2353,14 @@ class DrawIOLoader:
                     run.font_size = default_font_size
                 if run.font_color is None:
                     run.font_color = default_font_color
-                # bold/italic/underline are extracted from HTML, so don't apply defaults
+                # Apply default bold/italic/underline from style attribute if not set in HTML
+                # If bold/italic/underline are not extracted from HTML, apply fontStyle from style attribute as default
+                if not run.bold and default_font_style_flags['bold']:
+                    run.bold = True
+                if not run.italic and default_font_style_flags['italic']:
+                    run.italic = True
+                if not run.underline and default_font_style_flags['underline']:
+                    run.underline = True
         
         # Set paragraph alignment information
         # Mapping: style key -> (para attribute, extractor method, transform function)
