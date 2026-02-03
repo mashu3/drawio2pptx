@@ -13,6 +13,8 @@ drawio2pptx is a Python package that converts draw.io (diagrams.net) files to Po
 
 **Important**: One draw.io file corresponds to one PowerPoint presentation. Each page/diagram within the draw.io file becomes a separate slide in the resulting PowerPoint presentation.
 
+**[Live Demo →](https://mashu3.github.io/drawio2pptx/)** — See conversion examples (draw.io vs PowerPoint) in your browser.
+
 ---
 
 ## ✨ Features
@@ -109,14 +111,11 @@ drawio2pptx sample.drawio sample.pptx --analyze
 
 ---
 
-## 📄 Sample files
+## 📄 Samples & Demo
 
-The sample `.drawio` files included in this repository were created by the author
-for demonstration and testing purposes only.
+- **[Live Demo](https://mashu3.github.io/drawio2pptx/)** — Compare draw.io diagrams and converted PowerPoint side-by-side in the browser (Bar chart, Class diagram, Swimlane, Flowchart, Process bar, etc.).
 
-They do not include any source code or assets from diagrams.net (draw.io).
-Any third-party icons used in the diagrams remain the property of their
-respective owners.
+The `sample/` directory in this repository contains `.drawio` files used for demonstration and testing. They were created by the author and do not include any source code or assets from diagrams.net (draw.io). Any third-party icons used in the diagrams remain the property of their respective owners.
 
 ---
 
