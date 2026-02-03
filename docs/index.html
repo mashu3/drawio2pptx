@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>drawio2pptx - Live Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Convert draw.io diagrams to PowerPoint presentations. See live conversion examples." />
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="drawio2pptx - Convert draw.io to PowerPoint" />
+  <meta property="og:description" content="Convert draw.io diagrams to editable PowerPoint shapes. One-command installation: pip install drawio2pptx" />
+  <meta property="og:url" content="https://mashu3.github.io/drawio2pptx/" />
+  
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="drawio2pptx - Convert draw.io to PowerPoint" />
+  <meta name="twitter:description" content="Convert draw.io diagrams to editable PowerPoint shapes. One-command installation." />
+  <style>
+    :root {
+      --bg-primary: #0f0f23;
+      --bg-secondary: #1a1a2e;
+      --bg-card: #16213e;
+      --accent: #4f8cff;
+      --accent-glow: rgba(79, 140, 255, 0.3);
+      --text-primary: #e8e8e8;
+      --text-secondary: #a0a0b0;
+      --border: #2a2a4a;
+      --success: #4ade80;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+
+    /* Header */
+    header {
+      text-align: center;
+      padding: 48px 24px 32px;
+      background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+    }
+
+    .logo {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0;
+      background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .tagline {
+      color: var(--text-secondary);
+      margin-top: 12px;
+      font-size: 1.1rem;
+    }
+
+    .badge-row {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .badge svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .badge.warning {
+      background: rgba(255, 152, 0, 0.15);
+      border-color: rgba(255, 152, 0, 0.4);
+      color: #ff9500;
+    }
+
+    /* Feature highlight */
+    .feature-highlight {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      background: linear-gradient(135deg, rgba(79, 140, 255, 0.1) 0%, rgba(79, 140, 255, 0.05) 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .feature-single {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .feature-box {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .feature-icon {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent) 0%, #6ba3ff 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+
+    .feature-icon.install {
+      background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+    }
+
+    .feature-text {
+      flex: 1;
+    }
+
+    .feature-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 0 0 4px 0;
+      color: var(--text-primary);
+    }
+
+    .feature-desc {
+      font-size: 0.9rem;
+      margin: 0;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .feature-desc code {
+      background: rgba(79, 140, 255, 0.15);
+      color: var(--accent);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.85em;
+    }
+
+    /* Main content */
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0 24px 48px;
+    }
+
+    /* Sample selector */
+    .sample-section {
+      margin-bottom: 32px;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+    }
+
+    .sample-grid {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .sample-card {
+      position: relative;
+      background: var(--bg-card);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      width: 180px;
+      outline: none;
+    }
+
+    .sample-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .sample-card:focus-visible {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .sample-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    .sample-card.active::after {
+      content: '';
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 8px;
+      height: 8px;
+      background: var(--success);
+      border-radius: 50%;
+    }
+
+    .sample-thumb {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: contain;
+      background: #fff;
+      border-radius: 6px;
+      margin-bottom: 10px;
+    }
+
+    .sample-name {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .sample-desc {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Comparison view */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+    }
+
+    .panel-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+    }
+
+    .panel-icon.before {
+      background: linear-gradient(135deg, #ff9500 0%, #ff5e3a 100%);
+    }
+
+    .panel-icon.after {
+      background: linear-gradient(135deg, #34c759 0%, #30d158 100%);
+    }
+
+    .panel-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .panel-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .panel-content {
+      padding: 20px;
+      min-height: 400px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .panel-content img {
+      max-width: 100%;
+      max-height: 60vh;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .panel-content img.loaded {
+      opacity: 1;
+    }
+
+    .panel-content iframe {
+      width: 100%;
+      height: 60vh;
+      border: none;
+      border-radius: 8px;
+      background: #fff;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .panel-content iframe.loaded {
+      opacity: 1;
+    }
+
+    .loading-spinner {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-message {
+      color: var(--text-secondary);
+      text-align: center;
+      padding: 20px;
+    }
+
+    /* Arrow between panels */
+    .arrow-divider {
+      display: none;
+    }
+
+    /* Installation section */
+    .installation-section {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px 24px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    .installation-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 24px;
+      margin-top: 16px;
+    }
+
+    .installation-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.3rem;
+      flex-shrink: 0;
+    }
+
+    .installation-text {
+      text-align: left;
+    }
+
+    .installation-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 4px 0;
+      color: var(--text-primary);
+    }
+
+    .installation-desc {
+      font-size: 0.85rem;
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .installation-desc code {
+      background: rgba(79, 140, 255, 0.15);
+      color: var(--accent);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 32px 24px;
+      border-top: 1px solid var(--border);
+      margin-top: 0;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+
+    .footer-link:hover {
+      color: var(--accent);
+    }
+
+    .footer-link svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .comparison {
+        grid-template-columns: 1fr;
+      }
+
+      .sample-card {
+        width: calc(50% - 8px);
+      }
+
+      .panel-content {
+        min-height: 300px;
+      }
+
+      .panel-content iframe {
+        height: 50vh;
+      }
+    }
+
+    @media (max-width: 480px) {
+      header {
+        padding: 32px 16px 24px;
+      }
+
+      .logo {
+        font-size: 1.8rem;
+      }
+
+      .sample-card {
+        width: 100%;
+      }
+
+      .feature-highlight {
+        padding: 24px 16px;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+      }
+
+      .feature-box {
+        flex-direction: column;
+        text-align: center;
+      }
+
+      .installation-section {
+        padding: 24px 16px;
+      }
+
+      .installation-box {
+        flex-direction: column;
+        text-align: center;
+        padding: 16px;
+      }
+
+      .installation-text {
+        text-align: center;
+      }
+    }
+
+    /* Loading state */
+    .loading {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    /* Fade transition */
+    .fade-enter {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    .fade-enter-active {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.3s, transform 0.3s;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1 class="logo">drawio2pptx</h1>
+  <p class="tagline">Convert draw.io diagrams to PowerPoint presentations</p>
+  <div class="badge-row">
+    <span class="badge">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub
+    </span>
+    <span class="badge">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v2.01h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+      Python 3.8+
+    </span>
+    <span class="badge">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+      MIT License
+    </span>
+    <span class="badge warning">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+      Alpha - Under Development
+    </span>
+  </div>
+</header>
+
+<div class="feature-highlight">
+  <div class="feature-single">
+    <div class="feature-box">
+      <div class="feature-icon">✏️</div>
+      <div class="feature-text">
+        <div class="feature-title">Editable PowerPoint Shapes</div>
+        <div class="feature-desc">
+          Converted diagrams are <strong>native PowerPoint shapes</strong>, not images. 
+          You can edit text, colors, sizes, and styles directly in PowerPoint after conversion.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+  <section class="sample-section">
+    <div class="section-label">Select a sample</div>
+    <div class="sample-grid" id="sampleGrid">
+      <!-- Cards generated by JS -->
+    </div>
+  </section>
+
+  <section class="comparison">
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-icon before">📐</div>
+        <div>
+          <div class="panel-title">Before</div>
+          <div class="panel-subtitle">draw.io (SVG export)</div>
+        </div>
+      </div>
+      <div class="panel-content">
+        <div class="loading-spinner" id="beforeSpinner"></div>
+        <img id="beforeImage" src="" alt="draw.io diagram" style="display: none;">
+        <div class="error-message" id="beforeError" style="display: none;">
+          Failed to load image
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-icon after">📊</div>
+        <div>
+          <div class="panel-title">After</div>
+          <div class="panel-subtitle">PowerPoint (converted)</div>
+        </div>
+      </div>
+      <div class="panel-content">
+        <div class="loading-spinner" id="afterSpinner"></div>
+        <iframe id="afterFrame" src="" title="PowerPoint preview" style="display: none;"></iframe>
+        <div class="error-message" id="afterError" style="display: none;">
+          Failed to load PowerPoint preview
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="installation-section">
+  <div class="section-label">Get Started</div>
+  <div class="installation-box">
+    <div class="installation-icon">⚡</div>
+    <div class="installation-text">
+      <div class="installation-title">One-Command Installation</div>
+      <div class="installation-desc">
+        Install with: <code>pip install drawio2pptx</code>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-links">
+    <a href="https://github.com/mashu3/drawio2pptx" class="footer-link" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub Repository
+    </a>
+    <a href="https://pypi.org/project/drawio2pptx/" class="footer-link" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      PyPI Package
+    </a>
+  </div>
+</footer>
+
+<script>
+  // Sample data - easy to extend
+  const SAMPLES = [
+    {
+      id: 'barchart1',
+      name: 'Bar Chart',
+      description: 'Data visualization'
+    },
+    {
+      id: 'class_diagram',
+      name: 'Class Diagram',
+      description: 'UML structure'
+    },
+    {
+      id: 'swimlane',
+      name: 'Swimlane',
+      description: 'Process lanes'
+    },
+    {
+      id: 'flowchart',
+      name: 'Flowchart',
+      description: 'Process flow'
+    },
+    {
+      id: 'processbar',
+      name: 'Process Bar',
+      description: 'Progress indicator'
+    }
+    // Add more samples here:
+  ];
+
+  const BASE_URL = 'https://raw.githubusercontent.com/mashu3/drawio2pptx/main/sample';
+  const OFFICE_VIEWER = 'https://view.officeapps.live.com/op/embed.aspx?src=';
+
+  const sampleGrid = document.getElementById('sampleGrid');
+  const beforeImage = document.getElementById('beforeImage');
+  const afterFrame = document.getElementById('afterFrame');
+
+  let currentSample = SAMPLES[0].id;
+
+  // Generate sample cards
+  function renderSampleCards() {
+    sampleGrid.innerHTML = SAMPLES.map(sample => `
+      <div 
+        class="sample-card ${sample.id === currentSample ? 'active' : ''}" 
+        data-id="${sample.id}"
+        role="button"
+        tabindex="0"
+        aria-label="Select ${sample.name} sample"
+        aria-pressed="${sample.id === currentSample}"
+      >
+        <img 
+          class="sample-thumb" 
+          src="${BASE_URL}/${sample.id}.drawio.svg" 
+          alt="${sample.name}"
+          loading="lazy"
+        >
+        <div class="sample-name">${sample.name}</div>
+        <div class="sample-desc">${sample.description}</div>
+      </div>
+    `).join('');
+
+    // Add event handlers
+    document.querySelectorAll('.sample-card').forEach(card => {
+      card.addEventListener('click', () => selectSample(card.dataset.id));
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          selectSample(card.dataset.id);
+        }
+      });
+    });
+  }
+
+  // Select a sample
+  function selectSample(id) {
+    if (id === currentSample) return;
+    
+    currentSample = id;
+
+    // Update active state
+    document.querySelectorAll('.sample-card').forEach(card => {
+      const isActive = card.dataset.id === id;
+      card.classList.toggle('active', isActive);
+      card.setAttribute('aria-pressed', isActive);
+    });
+
+    // Update preview
+    updatePreview(id);
+  }
+
+  // Update preview panels
+  function updatePreview(id) {
+    const beforeSpinner = document.getElementById('beforeSpinner');
+    const afterSpinner = document.getElementById('afterSpinner');
+    const beforeError = document.getElementById('beforeError');
+    const afterError = document.getElementById('afterError');
+
+    // Reset states
+    beforeImage.style.display = 'none';
+    beforeImage.classList.remove('loaded');
+    afterFrame.style.display = 'none';
+    afterFrame.classList.remove('loaded');
+    beforeError.style.display = 'none';
+    afterError.style.display = 'none';
+    beforeSpinner.style.display = 'block';
+    afterSpinner.style.display = 'block';
+
+    // Load before image
+    const img = new Image();
+    img.onload = () => {
+      beforeImage.src = img.src;
+      beforeImage.style.display = 'block';
+      beforeImage.classList.add('loaded');
+      beforeSpinner.style.display = 'none';
+    };
+    img.onerror = () => {
+      beforeError.style.display = 'block';
+      beforeSpinner.style.display = 'none';
+    };
+    img.src = `${BASE_URL}/${id}.drawio.svg`;
+
+    // Load after iframe
+    const iframeSrc = `${OFFICE_VIEWER}${BASE_URL}/${id}.pptx`;
+    afterFrame.onload = () => {
+      afterFrame.style.display = 'block';
+      afterFrame.classList.add('loaded');
+      afterSpinner.style.display = 'none';
+    };
+    afterFrame.onerror = () => {
+      afterError.style.display = 'block';
+      afterSpinner.style.display = 'none';
+    };
+    afterFrame.src = iframeSrc;
+  }
+
+  // Initialize
+  renderSampleCards();
+  
+  // Load initial preview
+  if (SAMPLES.length > 0) {
+    updatePreview(currentSample);
+  }
+</script>
+
+</body>
+</html>
