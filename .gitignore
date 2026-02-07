@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+venv/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Test cache
+.pytest_cache/
+
+# Generated files
+sample/*.pptx
+
+# OS
+.DS_Store
