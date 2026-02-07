@@ -7,6 +7,7 @@ from drawio2pptx.config import (
     default_config,
     DASH_PATTERN_MAP,
     ARROW_TYPE_MAP,
+    PARALLELOGRAM_SKEW,
 )
 
 
@@ -93,3 +94,10 @@ def test_default_config():
     """Test default_config instance"""
     assert isinstance(default_config, ConversionConfig)
     assert default_config.scale_policy == 'none'
+
+
+def test_parallelogram_skew_constant():
+    """PARALLELOGRAM_SKEW is in valid range for PPTX adjustments (0..0.49)."""
+    assert PARALLELOGRAM_SKEW >= 0.0
+    assert PARALLELOGRAM_SKEW <= 0.49
+    assert isinstance(PARALLELOGRAM_SKEW, float)
