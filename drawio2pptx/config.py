@@ -64,11 +64,11 @@ DASH_PATTERN_MAP: Dict[str, str] = {
 
 # Arrow type mapping (draw.io → PowerPoint)
 ARROW_TYPE_MAP: Dict[str, Tuple[str, str, str]] = {
-    # (type, w, len) format
-    'classic': ('triangle', 'med', 'med'),
-    'block': ('triangle', 'med', 'med'),
-    'classicthin': ('triangle', 'sm', 'sm'),
-    'blockthin': ('triangle', 'sm', 'sm'),
+    # (type, w, len) format. stealth = ブロック型の矢印
+    'classic': ('stealth', 'med', 'med'),
+    'block': ('stealth', 'med', 'med'),
+    'classicthin': ('stealth', 'sm', 'sm'),
+    'blockthin': ('stealth', 'sm', 'sm'),
     # PowerPoint supports an "arrow" line-end type which corresponds to an open arrow head.
     'open': ('arrow', 'med', 'med'),
     'openthin': ('arrow', 'sm', 'sm'),

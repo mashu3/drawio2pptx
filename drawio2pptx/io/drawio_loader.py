@@ -1251,83 +1251,100 @@ class DrawIOLoader:
         if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None and not is_elbow_edge:
             points = self._build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
         else:
-            used_elbow_ports = False
-            auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
-                source_shape, target_shape, points_for_ports
-            )
-            # Elbow (org-chart style): connect from source bottom center to target top center
-            # so lines don't cross and draw.io's generic sourcePoint/targetPoint are ignored.
-            if is_elbow_edge and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
-                exit_x_val, exit_y_val = 0.5, 1.0   # bottom center
-                entry_x_val, entry_y_val = 0.5, 0.0  # top center
-                used_elbow_ports = True
-            if exit_x_val is None and hint_exit_x is not None:
-                exit_x_val = hint_exit_x
-            if exit_y_val is None and hint_exit_y is not None:
-                exit_y_val = hint_exit_y
-            if entry_x_val is None and hint_entry_x is not None:
-                entry_x_val = hint_entry_x
-            if entry_y_val is None and hint_entry_y is not None:
-                entry_y_val = hint_entry_y
-            exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
-            exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
-            entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
-            entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
+            points = None
+            # Straight edge with no waypoints and no explicit ports: use line–rect intersection
+            # so arrows attach where the line naturally hits the shape (not forced to center/corner).
+            if (
+                edge_style != "orthogonal"
+                and not points_raw
+                and exit_x_val is None
+                and exit_y_val is None
+                and entry_x_val is None
+                and entry_y_val is None
+                and not is_elbow_edge
+            ):
+                natural = self._natural_connector_endpoints(source_shape, target_shape)
+                if natural is not None:
+                    points = [natural[0], natural[1]]
 
-            if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
-                declared_exit = self._infer_port_side(exit_x, exit_y)
-                implied_exit = self._infer_port_side(auto_exit_x, auto_exit_y)
-                if implied_exit and declared_exit != implied_exit:
-                    exit_x, exit_y = auto_exit_x, auto_exit_y
-                declared_entry = self._infer_port_side(entry_x, entry_y)
-                implied_entry = self._infer_port_side(auto_entry_x, auto_entry_y)
-                if implied_entry and declared_entry != implied_entry:
-                    entry_x, entry_y = auto_entry_x, auto_entry_y
+            if points is None:
+                used_elbow_ports = False
+                auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
+                    source_shape, target_shape, points_for_ports
+                )
+                # Elbow (org-chart style): connect from source bottom center to target top center
+                # so lines don't cross and draw.io's generic sourcePoint/targetPoint are ignored.
+                if is_elbow_edge and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
+                    exit_x_val, exit_y_val = 0.5, 1.0   # bottom center
+                    entry_x_val, entry_y_val = 0.5, 0.0  # top center
+                    used_elbow_ports = True
+                if exit_x_val is None and hint_exit_x is not None:
+                    exit_x_val = hint_exit_x
+                if exit_y_val is None and hint_exit_y is not None:
+                    exit_y_val = hint_exit_y
+                if entry_x_val is None and hint_entry_x is not None:
+                    entry_x_val = hint_entry_x
+                if entry_y_val is None and hint_entry_y is not None:
+                    entry_y_val = hint_entry_y
+                exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
+                exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
+                entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
+                entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
 
-            if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
-                first_pt = points_for_ports[0]
-                last_pt = points_for_ports[-1]
-                exit_side = self._infer_port_side(exit_x, exit_y)
-                entry_side = self._infer_port_side(entry_x, entry_y)
-                if exit_side and source_shape.w and source_shape.h:
-                    if exit_side == "bottom":
-                        exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 1.0
-                    elif exit_side == "top":
-                        exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 0.0
-                    elif exit_side == "right":
-                        exit_x, exit_y = 1.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
-                    else:
-                        exit_x, exit_y = 0.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
-                if entry_side and target_shape.w and target_shape.h:
-                    if entry_side == "bottom":
-                        entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 1.0
-                    elif entry_side == "top":
-                        entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 0.0
-                    elif entry_side == "right":
-                        entry_x, entry_y = 1.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
-                    else:
-                        entry_x, entry_y = 0.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+                if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
+                    declared_exit = self._infer_port_side(exit_x, exit_y)
+                    implied_exit = self._infer_port_side(auto_exit_x, auto_exit_y)
+                    if implied_exit and declared_exit != implied_exit:
+                        exit_x, exit_y = auto_exit_x, auto_exit_y
+                    declared_entry = self._infer_port_side(entry_x, entry_y)
+                    implied_entry = self._infer_port_side(auto_entry_x, auto_entry_y)
+                    if implied_entry and declared_entry != implied_entry:
+                        entry_x, entry_y = auto_entry_x, auto_entry_y
 
-            source_x, source_y = self._calculate_boundary_point(source_shape, exit_x, exit_y, exit_dx, exit_dy)
-            target_x, target_y = self._calculate_boundary_point(target_shape, entry_x, entry_y, entry_dx, entry_dy)
-            filtered = [p for p in points_raw if p != (0.0, 0.0)]
-            if not filtered:
-                points = [(source_x, source_y), (target_x, target_y)]
-            else:
-                # Elbow with waypoints: go straight down from source, then through waypoints,
-                # then straight down into target top center (same as 1段目).
-                if used_elbow_ports:
-                    first_wp_y = filtered[0][1]
-                    last_wp_y = filtered[-1][1]
-                    points = [
-                        (source_x, source_y),
-                        (source_x, first_wp_y),
-                    ] + list(filtered) + [
-                        (target_x, last_wp_y),
-                        (target_x, target_y),
-                    ]
+                if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
+                    first_pt = points_for_ports[0]
+                    last_pt = points_for_ports[-1]
+                    exit_side = self._infer_port_side(exit_x, exit_y)
+                    entry_side = self._infer_port_side(entry_x, entry_y)
+                    if exit_side and source_shape.w and source_shape.h:
+                        if exit_side == "bottom":
+                            exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 1.0
+                        elif exit_side == "top":
+                            exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 0.0
+                        elif exit_side == "right":
+                            exit_x, exit_y = 1.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                        else:
+                            exit_x, exit_y = 0.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                    if entry_side and target_shape.w and target_shape.h:
+                        if entry_side == "bottom":
+                            entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 1.0
+                        elif entry_side == "top":
+                            entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 0.0
+                        elif entry_side == "right":
+                            entry_x, entry_y = 1.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+                        else:
+                            entry_x, entry_y = 0.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+
+                source_x, source_y = self._calculate_boundary_point(source_shape, exit_x, exit_y, exit_dx, exit_dy)
+                target_x, target_y = self._calculate_boundary_point(target_shape, entry_x, entry_y, entry_dx, entry_dy)
+                filtered = [p for p in points_raw if p != (0.0, 0.0)]
+                if not filtered:
+                    points = [(source_x, source_y), (target_x, target_y)]
                 else:
-                    points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
+                    # Elbow with waypoints: go straight down from source, then through waypoints,
+                    # then straight down into target top center (same as 1段目).
+                    if used_elbow_ports:
+                        first_wp_y = filtered[0][1]
+                        last_wp_y = filtered[-1][1]
+                        points = [
+                            (source_x, source_y),
+                            (source_x, first_wp_y),
+                        ] + list(filtered) + [
+                            (target_x, last_wp_y),
+                            (target_x, target_y),
+                        ]
+                    else:
+                        points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
 
         if edge_style == "orthogonal" and len(points) == 2:
             try:
@@ -1909,6 +1926,89 @@ class DrawIOLoader:
         else:
             x, y = self._boundary_point_rect(shape, rel_x, rel_y, base_x, base_y)
         return (x + offset_x, y + offset_y)
+
+    def _segment_rect_intersection_t_values(
+        self,
+        ax: float,
+        ay: float,
+        bx: float,
+        by: float,
+        shape: ShapeElement,
+    ) -> List[float]:
+        """
+        Return t values in [0,1] where segment (ax,ay)->(bx,by) intersects the shape's rect boundary.
+        Parametric: (ax + t*(bx-ax), ay + t*(by-ay)).
+        """
+        ts: List[float] = []
+        rx, ry = shape.x, shape.y
+        rw, rh = shape.w, shape.h
+        dx = bx - ax
+        dy = by - ay
+        eps = 1e-9
+
+        def in_segment(t: float) -> bool:
+            return 0.0 - eps <= t <= 1.0 + eps
+
+        # Left edge x = rx
+        if abs(dx) > eps:
+            t = (rx - ax) / dx
+            py = ay + t * dy
+            if in_segment(t) and ry - eps <= py <= ry + rh + eps:
+                ts.append(max(0.0, min(1.0, t)))
+        # Right edge
+        if abs(dx) > eps:
+            t = (rx + rw - ax) / dx
+            py = ay + t * dy
+            if in_segment(t) and ry - eps <= py <= ry + rh + eps:
+                ts.append(max(0.0, min(1.0, t)))
+        # Top edge y = ry
+        if abs(dy) > eps:
+            t = (ry - ay) / dy
+            px = ax + t * dx
+            if in_segment(t) and rx - eps <= px <= rx + rw + eps:
+                ts.append(max(0.0, min(1.0, t)))
+        # Bottom edge
+        if abs(dy) > eps:
+            t = (ry + rh - ay) / dy
+            px = ax + t * dx
+            if in_segment(t) and rx - eps <= px <= rx + rw + eps:
+                ts.append(max(0.0, min(1.0, t)))
+
+        return sorted(set(ts))
+
+    def _natural_connector_endpoints(
+        self,
+        source_shape: ShapeElement,
+        target_shape: ShapeElement,
+    ) -> Optional[tuple]:
+        """
+        For straight connectors with no waypoints, compute exit/entry points as the
+        intersection of the segment (source_center -> target_center) with each shape's
+        rectangle. This preserves "where the line actually sticks out" instead of
+        snapping to center or corner.
+        Returns (exit_pt, entry_pt) or None to fall back to port-based logic.
+        """
+        sx = source_shape.x + source_shape.w / 2.0
+        sy = source_shape.y + source_shape.h / 2.0
+        tx = target_shape.x + target_shape.w / 2.0
+        ty = target_shape.y + target_shape.h / 2.0
+        if abs(tx - sx) < 1e-9 and abs(ty - sy) < 1e-9:
+            return None
+        ts_src = self._segment_rect_intersection_t_values(sx, sy, tx, ty, source_shape)
+        ts_tgt = self._segment_rect_intersection_t_values(sx, sy, tx, ty, target_shape)
+        # Exit: where we leave source rect (smallest t > 0)
+        exit_ts = [t for t in ts_src if t > 1e-9]
+        # Entry: where we enter target rect (largest t < 1)
+        entry_ts = [t for t in ts_tgt if t < 1.0 - 1e-9]
+        if not exit_ts or not entry_ts:
+            return None
+        t_exit = min(exit_ts)
+        t_entry = max(entry_ts)
+        if t_exit > t_entry:
+            return None
+        exit_pt = (sx + t_exit * (tx - sx), sy + t_exit * (ty - sy))
+        entry_pt = (sx + t_entry * (tx - sx), sy + t_entry * (ty - sy))
+        return (exit_pt, entry_pt)
 
     def _auto_determine_ports(self, source_shape: ShapeElement, target_shape: ShapeElement, points: List[tuple] = None) -> tuple:
         """

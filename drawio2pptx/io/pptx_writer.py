@@ -824,6 +824,12 @@ class PPTXWriter:
         end_fill = arrow_end_fill if arrow_end_fill is not None else style.arrow_end_fill
         start_sz = arrow_start_size_px if arrow_start_size_px is not None else style.arrow_start_size_px
         end_sz = arrow_end_size_px if arrow_end_size_px is not None else style.arrow_end_size_px
+        # When endSize/startSize omitted, use larger arrow for thick lines (e.g. strokeWidth 3)
+        if style.stroke_width >= 2.5:
+            if start_sz is None and effective_start_arrow:
+                start_sz = 12.0  # maps to "lg"
+            if end_sz is None and effective_end_arrow:
+                end_sz = 12.0  # maps to "lg"
         if effective_start_arrow or effective_end_arrow:
             self._set_arrow_heads_xml(
                 line_shape, effective_start_arrow, effective_end_arrow,
@@ -1967,7 +1973,7 @@ class PPTXWriter:
             for tail_end in ln_element.findall('.//a:tailEnd', namespaces=NSMAP_DRAWINGML):
                 ln_element.remove(tail_end)
             
-            # Start arrow (draw.io: source side / line start)
+            # headEnd = line beginning (OOXML). draw.io startArrow
             if start_arrow:
                 arrow_info = map_arrow_type_with_size(start_arrow, start_size_px)
                 if arrow_info:
@@ -1977,7 +1983,7 @@ class PPTXWriter:
                     head_end.set('w', arrow_w)
                     head_end.set('len', arrow_len)
             
-            # End arrow (draw.io: target side / line end)
+            # tailEnd = line end (OOXML). draw.io endArrow (arrow tip)
             if end_arrow:
                 arrow_info = map_arrow_type_with_size(end_arrow, end_size_px)
                 if arrow_info:

@@ -90,7 +90,7 @@ def test_loader_applies_default_end_arrow_when_omitted(sample_dir: Path):
 def test_generated_pptx_contains_triangle_arrow_type_for_default_end_arrow(
     sample_dir: Path, tmp_path: Path
 ):
-    """Default end arrow (classic) is emitted as triangle in the generated slide XML."""
+    """Default end arrow (classic) is emitted as stealth in the generated slide XML."""
     sample_path = sample_dir / "sample.drawio"
     out_path = tmp_path / "sample_default_arrow.pptx"
 
@@ -106,15 +106,16 @@ def test_generated_pptx_contains_triangle_arrow_type_for_default_end_arrow(
     with zipfile.ZipFile(out_path) as z:
         slide_xml = z.read("ppt/slides/slide1.xml").decode("utf-8", errors="ignore")
 
-    assert 'type="triangle"' in slide_xml
-    assert '<a:tailEnd' in slide_xml and 'type="triangle"' in slide_xml
+    assert 'type="stealth"' in slide_xml
+    # draw.io endArrow (矢先) → OOXML tailEnd (line end)
+    assert '<a:tailEnd' in slide_xml and 'type="stealth"' in slide_xml
 
 
 # ---- Arrow size from endSize ----
 def test_generated_pptx_respects_endSize_for_filled_oval_arrow(
     sample_dir: Path, tmp_path: Path
 ):
-    """sample.drawio endArrow=oval; endFill=1; endSize=6 → PPTX w/len=\"sm\"."""
+    """sample.drawio endArrow=oval; endFill=1; endSize=6 → PPTX tailEnd type=oval, w/len=\"sm\"."""
     sample_path = sample_dir / "sample.drawio"
     out_path = tmp_path / "sample_endSize_oval.pptx"
 
@@ -130,6 +131,7 @@ def test_generated_pptx_respects_endSize_for_filled_oval_arrow(
     with zipfile.ZipFile(out_path) as z:
         slide_xml = z.read("ppt/slides/slide1.xml").decode("utf-8", errors="ignore")
 
+    # draw.io endArrow → OOXML tailEnd (line end)
     m = re.search(r'<a:tailEnd[^>]*type="oval"[^>]*/>', slide_xml)
     assert m, "Expected an a:tailEnd element with type='oval' in slide1.xml"
     frag = m.group(0)
