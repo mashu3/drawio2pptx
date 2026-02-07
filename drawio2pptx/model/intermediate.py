@@ -94,6 +94,8 @@ class Style:
     bpmn_symbol: Optional[str] = None
     # draw.io "step" shape size (style key: size), used for chevron inset
     step_size_px: Optional[float] = None
+    # draw.io label position: verticalLabelPosition=top/center/bottom. When "bottom", label is drawn below the shape.
+    vertical_label_position: Optional[str] = None
 
 
 @dataclass

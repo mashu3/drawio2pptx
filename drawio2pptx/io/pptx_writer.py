@@ -201,8 +201,16 @@ class PPTXWriter:
         except Exception:
             shape_is_flipped = False
 
-        # Set text (inside the shape when not flipped)
-        if shape.text and not shape_is_flipped:
+        # When verticalLabelPosition=bottom, label is rendered below the shape (see _add_shape_label_below).
+        # Do not set text inside the shape in that case.
+        label_below = (
+            getattr(shape.style, "vertical_label_position", None) == "bottom"
+            and shape.text
+            and not shape_is_flipped
+        )
+
+        # Set text (inside the shape when not flipped and not label-below)
+        if shape.text and not shape_is_flipped and not label_below:
             margin_overrides = None
             text_direction = None
             try:
@@ -331,6 +339,14 @@ class PPTXWriter:
             if not shape.style.has_shadow:
                 self._disable_shadow_xml(shp)
 
+        # 3D rotation for cube (shadedCube): apply scene3d so the box looks tilted (isometricLeftDown)
+        try:
+            if (shape.shape_type or "").lower() == "cube":
+                self._set_cube_3d_rotation_xml(shp)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set cube 3D rotation: {e}")
+
         # Add BPMN symbol overlay (e.g., plus sign for parallel gateway)
         try:
             bpmn_symbol = getattr(shape.style, "bpmn_symbol", None)
@@ -339,6 +355,14 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to add BPMN symbol overlay: {e}")
+
+        # Label below shape (draw.io verticalLabelPosition=bottom, e.g. timeline cubes "2017", "2018")
+        if label_below:
+            try:
+                self._add_shape_label_below(slide, shape)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to add shape label below: {e}")
 
         # Text overlay for flipped shapes (keep glyphs upright)
         if shape.text and shape_is_flipped:
@@ -422,6 +446,58 @@ class PPTXWriter:
             clip_overflow=bool(getattr(shape.style, "clip_text", False)),
         )
 
+        return tb
+
+    def _add_shape_label_below(self, slide, shape: ShapeElement):
+        """Render shape label in a textbox below the shape (draw.io verticalLabelPosition=bottom)."""
+        if not shape.text or shape.w <= 0 or shape.h <= 0:
+            return None
+
+        gap_px = 4.0
+        label_y = shape.y + shape.h + gap_px
+
+        # Estimate label height from first paragraph font size
+        font_size_px = 12.0
+        if shape.text:
+            for run in shape.text[0].runs:
+                if run.font_size is not None:
+                    font_size_px = float(run.font_size)
+                    break
+        label_h_px = max(20.0, font_size_px * 1.5)
+
+        left = px_to_emu(shape.x)
+        top = px_to_emu(label_y)
+        width = px_to_emu(shape.w)
+        height = px_to_emu(label_h_px)
+
+        tb = slide.shapes.add_textbox(left, top, width, height)
+        try:
+            if shape.id:
+                tb.name = f"drawio2pptx:shape-label-below:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set label-below text box name: {e}")
+
+        try:
+            tb.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set label-below fill: {e}")
+        try:
+            tb.line.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set label-below line: {e}")
+
+        self._set_text_frame(
+            tb.text_frame,
+            shape.text,
+            default_highlight_color=shape.style.label_background_color,
+            word_wrap=False,
+            margin_overrides_px=None,
+            text_direction=None,
+            clip_overflow=False,
+        )
         return tb
 
     def _apply_shape_transform(self, shp, shape: ShapeElement) -> None:
@@ -2225,3 +2301,49 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to disable shadow XML: {e}")
+
+    def _set_cube_3d_rotation_xml(self, shape):
+        """Apply 3D scene (camera + lightRig) and ratio adjustment to cube shape.
+        - scene3d: isometricLeftDown + threePt light so the box looks tilted.
+        - prstGeom adj=51666: makes the top face closer to a square (from reference timeline4のコピー.pptx).
+        """
+        try:
+            if not hasattr(shape, '_element'):
+                return
+            shape_element = shape._element
+            # spPr is a direct child of p:sp with presentation namespace
+            sp_pr = shape_element.find('.//p:spPr', namespaces=NSMAP_PRESENTATIONML)
+            if sp_pr is None:
+                for child in shape_element:
+                    if child.tag.endswith('}spPr') or 'spPr' in child.tag:
+                        sp_pr = child
+                        break
+            if sp_pr is None:
+                return
+
+            # Cube adjustment: adj=51666 so the top face is more square (reference file)
+            prst_geom = sp_pr.find('.//a:prstGeom', namespaces=NSMAP_DRAWINGML)
+            if prst_geom is not None and prst_geom.get('prst') == 'cube':
+                av_lst = prst_geom.find('a:avLst', namespaces=NSMAP_DRAWINGML)
+                if av_lst is None:
+                    av_lst = ET.SubElement(prst_geom, _a('avLst'))
+                # Remove existing adj if any, then add the reference value
+                for gd in av_lst.findall('a:gd', namespaces=NSMAP_DRAWINGML):
+                    if gd.get('name') == 'adj':
+                        av_lst.remove(gd)
+                        break
+                gd_adj = ET.SubElement(av_lst, _a('gd'))
+                gd_adj.set('name', 'adj')
+                gd_adj.set('fmla', 'val 51666')
+
+            if sp_pr.find('.//a:scene3d', namespaces=NSMAP_DRAWINGML) is not None:
+                return
+            scene3d = ET.SubElement(sp_pr, _a('scene3d'))
+            camera = ET.SubElement(scene3d, _a('camera'))
+            camera.set('prst', 'isometricLeftDown')
+            light_rig = ET.SubElement(scene3d, _a('lightRig'))
+            light_rig.set('rig', 'threePt')
+            light_rig.set('dir', 't')
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set cube 3D rotation XML: {e}")

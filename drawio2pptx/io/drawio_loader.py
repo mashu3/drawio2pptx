@@ -130,6 +130,8 @@ class StyleExtractor:
         'mxgraph.arrows2.arrow': 'right_arrow',
         # diagrams.net "Stylised Arrow" is closer to PPTX's notched block arrow than a plain right arrow.
         'mxgraph.arrows2.stylisedarrow': 'notched_right_arrow',
+        # mxgraph.infographic: 3D shaded cube -> PowerPoint 3D box (直方体)
+        'mxgraph.infographic.shadedcube': 'cube',
     }
     
     # Font style bit flags: bit position -> attribute name
@@ -1005,6 +1007,12 @@ class DrawIOLoader:
             if self.logger:
                 self.logger.debug(f"Failed to extract step size: {e}")
 
+        # Extract verticalLabelPosition (draw.io: label below shape when "bottom")
+        vertical_label_position = None
+        vlp_str = self.style_extractor.extract_style_value(style_str, "verticalLabelPosition")
+        if vlp_str:
+            vertical_label_position = vlp_str.strip().lower()
+
         # Extract text
         text_paragraphs = self._extract_text(text_raw, font_color, style_str)
 
@@ -1038,6 +1046,7 @@ class DrawIOLoader:
             no_stroke=no_stroke,
             bpmn_symbol=bpmn_symbol,
             step_size_px=step_size,
+            vertical_label_position=vertical_label_position,
         )
 
         # Swimlane/container metadata (used for header layout in PPTX)

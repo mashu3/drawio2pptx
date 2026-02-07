@@ -23,6 +23,7 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     # 3D shapes
     'cylinder3': MSO_SHAPE.CAN,
     'cylinder': MSO_SHAPE.CAN,
+    'cube': MSO_SHAPE.CUBE,
     # Flowchart shapes
     'document': MSO_SHAPE.FLOWCHART_DOCUMENT,
     'tape': MSO_SHAPE.FLOWCHART_PUNCHED_TAPE,
