@@ -1251,9 +1251,16 @@ class DrawIOLoader:
         if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None and not is_elbow_edge:
             points = self._build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
         else:
+            used_elbow_ports = False
             auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
                 source_shape, target_shape, points_for_ports
             )
+            # Elbow (org-chart style): connect from source bottom center to target top center
+            # so lines don't cross and draw.io's generic sourcePoint/targetPoint are ignored.
+            if is_elbow_edge and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
+                exit_x_val, exit_y_val = 0.5, 1.0   # bottom center
+                entry_x_val, entry_y_val = 0.5, 0.0  # top center
+                used_elbow_ports = True
             if exit_x_val is None and hint_exit_x is not None:
                 exit_x_val = hint_exit_x
             if exit_y_val is None and hint_exit_y is not None:
@@ -1267,7 +1274,7 @@ class DrawIOLoader:
             entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
             entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
 
-            if edge_style == "orthogonal" and points_for_ports:
+            if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
                 declared_exit = self._infer_port_side(exit_x, exit_y)
                 implied_exit = self._infer_port_side(auto_exit_x, auto_exit_y)
                 if implied_exit and declared_exit != implied_exit:
@@ -1277,7 +1284,7 @@ class DrawIOLoader:
                 if implied_entry and declared_entry != implied_entry:
                     entry_x, entry_y = auto_entry_x, auto_entry_y
 
-            if edge_style == "orthogonal" and points_for_ports:
+            if edge_style == "orthogonal" and points_for_ports and not used_elbow_ports:
                 first_pt = points_for_ports[0]
                 last_pt = points_for_ports[-1]
                 exit_side = self._infer_port_side(exit_x, exit_y)
@@ -1307,7 +1314,20 @@ class DrawIOLoader:
             if not filtered:
                 points = [(source_x, source_y), (target_x, target_y)]
             else:
-                points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
+                # Elbow with waypoints: go straight down from source, then through waypoints,
+                # then straight down into target top center (same as 1段目).
+                if used_elbow_ports:
+                    first_wp_y = filtered[0][1]
+                    last_wp_y = filtered[-1][1]
+                    points = [
+                        (source_x, source_y),
+                        (source_x, first_wp_y),
+                    ] + list(filtered) + [
+                        (target_x, last_wp_y),
+                        (target_x, target_y),
+                    ]
+                else:
+                    points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
 
         if edge_style == "orthogonal" and len(points) == 2:
             try:
