@@ -49,16 +49,44 @@ class PPTXWriter:
         """
         self.config = config or default_config
         self.logger = logger
-    
-    def create_presentation(self, page_size: Optional[Tuple[float, float]] = None) -> Presentation:
+
+    def _set_shape_name(self, shape_obj, name: Optional[str]) -> None:
+        """Set debug name on a shape/connector/textbox; log on failure."""
+        if not name:
+            return
+        try:
+            shape_obj.name = name
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set shape name: {e}")
+
+    def _safe_try(self, fn, debug_msg: str) -> None:
+        """Run fn(); on Exception log debug_msg and continue."""
+        try:
+            fn()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to {debug_msg}: {e}")
+
+    @staticmethod
+    def _shape_type_is(shape: ShapeElement, *names: str) -> bool:
+        """Return True if shape.shape_type (normalized lower) equals any of *names."""
+        return (shape.shape_type or "").strip().lower() in names
+
+    @staticmethod
+    def _shape_type_contains(shape: ShapeElement, substr: str) -> bool:
+        """Return True if shape.shape_type (lower) contains substr."""
+        return substr.lower() in (shape.shape_type or "").lower()
+
+    def create_presentation(self, page_size: Optional[Tuple[float, float]] = None) -> Tuple[Presentation, object]:
         """
-        Create presentation
-        
+        Create presentation and blank layout.
+
         Args:
             page_size: (width, height) tuple (px), or None
-        
+
         Returns:
-            Presentation object
+            Tuple of (Presentation, blank layout).
         """
         prs = Presentation()
         
@@ -100,32 +128,14 @@ class PPTXWriter:
             elif isinstance(element, TextElement):
                 self._add_text(slide, element)
     
-    def _add_shape(self, slide, shape: ShapeElement):
-        """Add shape"""
-        if shape.w <= 0 or shape.h <= 0:
-            return None
-
-        if (shape.shape_type or "").lower() == "line":
-            return self._add_line_shape(slide, shape)
-        
-        # Map shape type
-        pptx_shape_type = map_shape_type_to_pptx(shape.shape_type)
-        
-        # For rectangles with corner radius, use ROUNDED_RECTANGLE
-        if (pptx_shape_type == MSO_SHAPE.RECTANGLE and 
-            shape.style.corner_radius is not None and 
-            shape.style.corner_radius > 0):
-            pptx_shape_type = MSO_SHAPE.ROUNDED_RECTANGLE
-        
-        # Create shape
+    def _compute_shape_geometry(self, shape: ShapeElement) -> Tuple[int, int, int, int]:
+        """Compute (left_emu, top_emu, width_emu, height_emu) for add_shape, including step/arrow adjustments."""
         left = px_to_emu(shape.x)
         top = px_to_emu(shape.y)
         width = px_to_emu(shape.w)
         height = px_to_emu(shape.h)
-
-        # Slightly reduce step width to preserve the visual gap seen in draw.io.
         try:
-            if (shape.shape_type or "").lower() == "step":
+            if self._shape_type_is(shape, "step"):
                 step_size = getattr(shape.style, "step_size_px", None)
                 if step_size is not None and shape.w > 0:
                     gap_px = max(0.0, min(step_size * 0.1, shape.w * 0.3))
@@ -133,13 +143,8 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to apply step gap: {e}")
-
-        # Arrow shapes: draw.io geometry is in page coordinates (horizontal × vertical).
-        # PPTX arrow defaults to right; we set rotation 90°/270° for up/down. So we add shape with (w, h),
-        # then rotate — after rotation the box becomes (h, w). Swap w/h for 90°/270° so the final visual box matches (shape.w, shape.h).
-        # Adjust position so the visual top-left after rotation stays at (shape.x, shape.y): place unrotated shape so its center becomes (shape.x + shape.w/2, shape.y + shape.h/2).
         try:
-            if (shape.shape_type or "").lower() in ("right_arrow", "notched_right_arrow"):
+            if self._shape_type_is(shape, "right_arrow", "notched_right_arrow"):
                 rot = float(getattr(shape.transform, "rotation", 0.0) or 0.0) % 360.0
                 if abs(rot - 90.0) < 1.0 or abs(rot - 270.0) < 1.0:
                     width, height = height, width
@@ -147,50 +152,30 @@ class PPTXWriter:
                     top = px_to_emu(shape.y + (shape.h - shape.w) / 2.0)
         except Exception:
             pass
+        return left, top, width, height
 
+    def _add_shape(self, slide, shape: ShapeElement):
+        """Add shape"""
+        if shape.w <= 0 or shape.h <= 0:
+            return None
+
+        if self._shape_type_is(shape, "line"):
+            return self._add_line_shape(slide, shape)
+
+        pptx_shape_type = map_shape_type_to_pptx(shape.shape_type)
+        if (pptx_shape_type == MSO_SHAPE.RECTANGLE and
+                shape.style.corner_radius is not None and
+                shape.style.corner_radius > 0):
+            pptx_shape_type = MSO_SHAPE.ROUNDED_RECTANGLE
+
+        left, top, width, height = self._compute_shape_geometry(shape)
         shp = slide.shapes.add_shape(
             pptx_shape_type,
             left, top, width, height
         )
         
-        # Debug-friendly name (not visible in normal slideshow mode).
-        try:
-            if shape.id:
-                shp.name = f"drawio2pptx:shape:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set shape name: {e}")
-
-        # For parallelograms, explicitly set the skew (adjust) to match connection point calculation with appearance
-        try:
-            if shape.shape_type and "parallelogram" in shape.shape_type.lower():
-                if hasattr(shp, "adjustments") and len(shp.adjustments) > 0:
-                    shp.adjustments[0] = float(PARALLELOGRAM_SKEW)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set parallelogram adjustments: {e}")
-
-        # For draw.io step shapes (mapped to CHEVRON), honor the "size" parameter to relax the angle.
-        try:
-            if (shape.shape_type or "").lower() == "step" and hasattr(shp, "adjustments"):
-                if len(shp.adjustments) > 0:
-                    step_size = getattr(shape.style, "step_size_px", None)
-                    if step_size is not None and shape.w > 0:
-                        # PPTX chevron adjustment expects a fraction of width.
-                        adj = (step_size / float(shape.w)) * 1.5
-                        # Clamp to a reasonable range to avoid invalid geometry.
-                        adj = max(0.02, min(0.6, adj))
-                        shp.adjustments[0] = float(adj)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set step chevron adjustment: {e}")
-
-        # Apply rotation/flip (draw.io: rotation/flipH/flipV) when present.
-        try:
-            self._apply_shape_transform(shp, shape)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to apply shape transform: {e}")
+        self._set_shape_name(shp, f"drawio2pptx:shape:{shape.id}" if shape.id else None)
+        self._apply_shape_adjustments(shp, shape)
 
         # If the shape is flipped (flipH/flipV), flipping via <a:xfrm> also flips the text in PowerPoint.
         # draw.io typically keeps label glyphs upright. Work around by rendering the label as a separate
@@ -211,40 +196,7 @@ class PPTXWriter:
 
         # Set text (inside the shape when not flipped and not label-below)
         if shape.text and not shape_is_flipped and not label_below:
-            margin_overrides = None
-            text_direction = None
-            try:
-                if getattr(shape.style, "is_swimlane", False):
-                    start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
-                    if start_size > 0:
-                        first_para = shape.text[0]
-                        base_top = first_para.spacing_top or 0.0
-                        base_left = first_para.spacing_left or 0.0
-                        base_bottom = first_para.spacing_bottom or 0.0
-                        base_right = first_para.spacing_right or 0.0
-
-                        if getattr(shape.style, "swimlane_horizontal", False):
-                            # Horizontal swimlane: header on the top
-                            margin_overrides = (
-                                base_top,
-                                base_left,
-                                max(shape.h - start_size + base_bottom, 0.0),
-                                base_right,
-                            )
-                        else:
-                            # Vertical swimlane: header on the left (vertical text)
-                            # Use vert270 to match draw.io's left header vertical text
-                            text_direction = "vert270"
-                            margin_overrides = (
-                                base_top,
-                                base_left,
-                                base_bottom,
-                                max(shape.w - start_size + base_right, 0.0),
-                            )
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to compute swimlane header margins: {e}")
-
+            margin_overrides, text_direction = self._get_swimlane_text_options(shape)
             self._set_text_frame(
                 shp.text_frame,
                 shape.text,
@@ -255,187 +207,50 @@ class PPTXWriter:
                 clip_overflow=bool(getattr(shape.style, "clip_text", False)),
             )
         
-        # Set fill
-        fill_color = shape.style.fill
-        is_swimlane = getattr(shape.style, "is_swimlane", False)
-        swimlane_start = float(getattr(shape.style, "swimlane_start_size", 0) or 0)
+        self._apply_shape_fill(shp, shape)
+        stroke_color = self._apply_shape_stroke(shp, shape)
+        self._maybe_add_swimlane_divider(slide, shape, stroke_color)
+        self._apply_shape_shadow(shp, shape.style.has_shadow)
 
-        # Swimlane gradient only when fillColor is explicit (e.g. flowchart3). Do not apply when
-        # fillColor is omitted (e.g. flowchart2 Pool/Lane) to avoid unwanted gradient.
-        if is_swimlane and swimlane_start > 0 and shape.h > 0 and isinstance(fill_color, RGBColor):
-            # Swimlane with explicit fillColor: header = fillColor, body = swimlaneFillColor.
-            self._set_swimlane_gradient_fill_xml(shp, shape)
-        else:
-            if fill_color == "default":
-                self._set_default_fill_xml(shp)
-            elif fill_color:
-                try:
-                    shp.fill.solid()
-                    shp.fill.fore_color.rgb = fill_color
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to set fill color: {e}")
-            else:
-                try:
-                    shp.fill.background()
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to set background fill: {e}")
-
-        # Gradient fill: only used for swimlane header vs body (_set_swimlane_gradient_fill_xml above).
-        # Do not apply draw.io gradientColor/gradientDirection to normal shapes to avoid unwanted gradient.
-        #
-        # Set stroke
-        if getattr(shape.style, "no_stroke", False):
-            try:
-                self._set_no_line_xml(shp)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to disable stroke: {e}")
-        else:
-            # Use black as default if stroke is None
-            stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
-            try:
-                shp.line.fill.solid()
-                self._set_stroke_color_xml(shp, stroke_color)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set stroke color: {e}")
-            
-            if shape.style.stroke_width > 0:
-                try:
-                    shp.line.width = px_to_pt(shape.style.stroke_width)
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to set stroke width: {e}")
-
-        # Swimlane header divider (draw.io visual split between header and content)
-        try:
-            if getattr(shape.style, "is_swimlane", False):
-                start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
-                draw_divider = getattr(shape.style, "swimlane_line", True)
-                if start_size > 0 and draw_divider:
-                    self._add_swimlane_header_divider(
-                        slide=slide,
-                        shape=shape,
-                        stroke_color=stroke_color,
-                        stroke_width_px=shape.style.stroke_width,
-                    )
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to add swimlane header divider: {e}")
-        
-        # Shadow settings (similar to legacy: disable shadow when has_shadow is False)
-        try:
-            if shape.style.has_shadow:
-                # Enable shadow (inherit from theme)
-                shp.shadow.inherit = True
-            else:
-                # Disable shadow
-                shp.shadow.inherit = False
-                # Disable shadow via XML (similar to legacy _disable_shadow_xml)
-                self._disable_shadow_xml(shp)
-        except Exception:
-            if not shape.style.has_shadow:
-                self._disable_shadow_xml(shp)
-
-        # 3D rotation for cube (shadedCube): apply scene3d so the box looks tilted (isometricLeftDown)
-        try:
-            if (shape.shape_type or "").lower() == "cube":
-                self._set_cube_3d_rotation_xml(shp)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set cube 3D rotation: {e}")
-
-        # Add BPMN symbol overlay (e.g., plus sign for parallel gateway)
-        try:
-            bpmn_symbol = getattr(shape.style, "bpmn_symbol", None)
-            if bpmn_symbol and bpmn_symbol.lower() == "parallelgw":
-                self._add_bpmn_parallel_gateway_symbol(slide, shape)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to add BPMN symbol overlay: {e}")
-
-        # Label below shape (draw.io verticalLabelPosition=bottom, e.g. timeline cubes "2017", "2018")
+        self._maybe_add_cube_3d(shp, shape)
+        self._maybe_add_bpmn_symbol(slide, shape)
         if label_below:
-            try:
-                self._add_shape_label_below(slide, shape)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to add shape label below: {e}")
-
-        # Text overlay for flipped shapes (keep glyphs upright)
+            self._safe_try(lambda: self._add_shape_label_below(slide, shape), "add shape label below")
         if shape.text and shape_is_flipped:
-            try:
-                self._add_shape_text_overlay(slide, shape)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to add flipped-shape text overlay: {e}")
-        
+            self._safe_try(lambda: self._add_shape_text_overlay(slide, shape), "add flipped-shape text overlay")
         return shp
+
+    def _add_transparent_textbox(self, slide, left_emu, top_emu, width_emu, height_emu, name: Optional[str] = None):
+        """Add a textbox with transparent fill and line; return the shape."""
+        tb = slide.shapes.add_textbox(left_emu, top_emu, width_emu, height_emu)
+        self._set_shape_name(tb, name)
+        try:
+            tb.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set textbox fill background: {e}")
+        try:
+            tb.line.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set textbox line background: {e}")
+        return tb
 
     def _add_shape_text_overlay(self, slide, shape: ShapeElement):
         """Render shape label as a transparent textbox overlay (used for flipped shapes)."""
         if not shape.text or shape.w <= 0 or shape.h <= 0:
             return None
-
         left = px_to_emu(shape.x)
         top = px_to_emu(shape.y)
         width = px_to_emu(shape.w)
         height = px_to_emu(shape.h)
+        tb = self._add_transparent_textbox(
+            slide, left, top, width, height,
+            f"drawio2pptx:shape-text-overlay:{shape.id}" if shape.id else None,
+        )
 
-        tb = slide.shapes.add_textbox(left, top, width, height)
-        try:
-            if shape.id:
-                tb.name = f"drawio2pptx:shape-text-overlay:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set overlay text box name: {e}")
-
-        # Transparent textbox background/line.
-        try:
-            tb.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set overlay textbox fill background: {e}")
-        try:
-            tb.line.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set overlay textbox line background: {e}")
-
-        # Apply the same paragraph formatting.
-        margin_overrides = None
-        text_direction = None
-        try:
-            if getattr(shape.style, "is_swimlane", False):
-                # Keep swimlane logic consistent (rare for flipped shapes, but safe).
-                start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
-                if start_size > 0:
-                    first_para = shape.text[0]
-                    base_top = first_para.spacing_top or 0.0
-                    base_left = first_para.spacing_left or 0.0
-                    base_bottom = first_para.spacing_bottom or 0.0
-                    base_right = first_para.spacing_right or 0.0
-                    if getattr(shape.style, "swimlane_horizontal", False):
-                        margin_overrides = (
-                            base_top,
-                            base_left,
-                            max(shape.h - start_size + base_bottom, 0.0),
-                            base_right,
-                        )
-                    else:
-                        text_direction = "vert270"
-                        margin_overrides = (
-                            base_top,
-                            base_left,
-                            base_bottom,
-                            max(shape.w - start_size + base_right, 0.0),
-                        )
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to compute overlay margins: {e}")
-
+        # Apply the same paragraph formatting (reuse swimlane margin/direction when applicable).
+        margin_overrides, text_direction = self._get_swimlane_text_options(shape)
         self._set_text_frame(
             tb.text_frame,
             shape.text,
@@ -469,25 +284,10 @@ class PPTXWriter:
         top = px_to_emu(label_y)
         width = px_to_emu(shape.w)
         height = px_to_emu(label_h_px)
-
-        tb = slide.shapes.add_textbox(left, top, width, height)
-        try:
-            if shape.id:
-                tb.name = f"drawio2pptx:shape-label-below:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set label-below text box name: {e}")
-
-        try:
-            tb.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set label-below fill: {e}")
-        try:
-            tb.line.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set label-below line: {e}")
+        tb = self._add_transparent_textbox(
+            slide, left, top, width, height,
+            f"drawio2pptx:shape-label-below:{shape.id}" if shape.id else None,
+        )
 
         self._set_text_frame(
             tb.text_frame,
@@ -499,6 +299,122 @@ class PPTXWriter:
             clip_overflow=False,
         )
         return tb
+
+    def _apply_shape_fill(self, shp, shape: ShapeElement) -> None:
+        """Apply fill (swimlane gradient, default, solid, or background) to a shape."""
+        fill_color = shape.style.fill
+        is_swimlane = getattr(shape.style, "is_swimlane", False)
+        swimlane_start = float(getattr(shape.style, "swimlane_start_size", 0) or 0)
+        if is_swimlane and swimlane_start > 0 and shape.h > 0 and isinstance(fill_color, RGBColor):
+            self._set_swimlane_gradient_fill_xml(shp, shape)
+        elif fill_color == "default":
+            self._set_default_fill_xml(shp)
+        elif fill_color:
+            try:
+                shp.fill.solid()
+                shp.fill.fore_color.rgb = fill_color
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set fill color: {e}")
+        else:
+            try:
+                shp.fill.background()
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set background fill: {e}")
+
+    def _maybe_add_swimlane_divider(
+        self, slide, shape: ShapeElement, stroke_color: Optional[RGBColor]
+    ) -> None:
+        """Add swimlane header divider line when applicable."""
+        try:
+            if not getattr(shape.style, "is_swimlane", False):
+                return
+            # スイムレーンが strokeColor=none のときは区切り線を描かない（存在しない黒線を出さない）
+            if stroke_color is None:
+                return
+            start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+            if start_size <= 0 or not getattr(shape.style, "swimlane_line", True):
+                return
+            self._add_swimlane_header_divider(
+                slide=slide,
+                shape=shape,
+                stroke_color=stroke_color,
+                stroke_width_px=shape.style.stroke_width,
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to add swimlane header divider: {e}")
+
+    def _apply_shape_stroke(self, shp, shape: ShapeElement) -> Optional[RGBColor]:
+        """Apply stroke (or no_stroke) to a shape. Returns stroke color for use by e.g. swimlane divider, or None if no stroke."""
+        if getattr(shape.style, "no_stroke", False):
+            try:
+                self._set_no_line_xml(shp)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to disable stroke: {e}")
+            return None
+        stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
+        try:
+            shp.line.fill.solid()
+            self._set_stroke_color_xml(shp, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set stroke color: {e}")
+        if shape.style.stroke_width > 0:
+            try:
+                shp.line.width = px_to_pt(shape.style.stroke_width)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set stroke width: {e}")
+        return stroke_color
+
+    def _apply_shape_shadow(self, shp, has_shadow: bool) -> None:
+        """Enable or disable shadow on a shape (inherit from theme or disable via XML)."""
+        try:
+            if has_shadow:
+                shp.shadow.inherit = True
+            else:
+                shp.shadow.inherit = False
+                self._disable_shadow_xml(shp)
+        except Exception:
+            if not has_shadow:
+                self._disable_shadow_xml(shp)
+
+    def _get_swimlane_text_options(self, shape: ShapeElement) -> Tuple[Optional[Tuple[float, float, float, float]], Optional[str]]:
+        """Return (margin_overrides_px, text_direction) for swimlane shapes; otherwise (None, None)."""
+        try:
+            if not getattr(shape.style, "is_swimlane", False):
+                return None, None
+            start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+            if start_size <= 0 or not shape.text:
+                return None, None
+            first_para = shape.text[0]
+            base_top = first_para.spacing_top or 0.0
+            base_left = first_para.spacing_left or 0.0
+            base_bottom = first_para.spacing_bottom or 0.0
+            base_right = first_para.spacing_right or 0.0
+            if getattr(shape.style, "swimlane_horizontal", False):
+                margin_overrides = (
+                    base_top,
+                    base_left,
+                    max(shape.h - start_size + base_bottom, 0.0),
+                    base_right,
+                )
+                return margin_overrides, None
+            text_direction = "vert270"
+            margin_overrides = (
+                base_top,
+                base_left,
+                base_bottom,
+                max(shape.w - start_size + base_right, 0.0),
+            )
+            return margin_overrides, text_direction
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to compute swimlane text options: {e}")
+            return None, None
 
     def _apply_shape_transform(self, shp, shape: ShapeElement) -> None:
         """Apply shape rotation/flip from the intermediate model to the PPTX shape."""
@@ -548,9 +464,75 @@ class PPTXWriter:
         except Exception:
             return None
 
+    def _maybe_add_cube_3d(self, shp, shape: ShapeElement) -> None:
+        """Apply cube 3D rotation XML when shape type is cube."""
+        if not self._shape_type_is(shape, "cube"):
+            return
+        self._safe_try(lambda: self._set_cube_3d_rotation_xml(shp), "set cube 3D rotation")
+
+    def _maybe_add_bpmn_symbol(self, slide, shape: ShapeElement) -> None:
+        """Add BPMN symbol overlay (e.g. parallel gateway) when style requests it."""
+        bpmn = getattr(shape.style, "bpmn_symbol", None)
+        if not bpmn or (bpmn or "").strip().lower() != "parallelgw":
+            return
+        self._safe_try(lambda: self._add_bpmn_parallel_gateway_symbol(slide, shape), "add BPMN symbol overlay")
+
+    def _apply_shape_adjustments(self, shp, shape: ShapeElement) -> None:
+        """Apply parallelogram skew, step chevron size, and rotation/flip to a shape."""
+        try:
+            if self._shape_type_contains(shape, "parallelogram") and hasattr(shp, "adjustments") and len(shp.adjustments) > 0:
+                shp.adjustments[0] = float(PARALLELOGRAM_SKEW)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set parallelogram adjustments: {e}")
+        try:
+            if self._shape_type_is(shape, "step") and hasattr(shp, "adjustments") and len(shp.adjustments) > 0:
+                step_size = getattr(shape.style, "step_size_px", None)
+                if step_size is not None and shape.w > 0:
+                    adj = max(0.02, min(0.6, (step_size / float(shape.w)) * 1.5))
+                    shp.adjustments[0] = float(adj)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set step chevron adjustment: {e}")
+        try:
+            self._apply_shape_transform(shp, shape)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to apply shape transform: {e}")
+
+    def _apply_line_style_to_connector(
+        self,
+        line_shape,
+        stroke_color: RGBColor,
+        stroke_width_px: float,
+        has_shadow: bool,
+        log_prefix: str = "line",
+    ) -> None:
+        """Apply stroke color, width, and shadow to a connector/line shape."""
+        try:
+            line_shape.line.fill.solid()
+            self._set_stroke_color_xml(line_shape, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set {log_prefix} stroke color: {e}")
+        if stroke_width_px and stroke_width_px > 0:
+            try:
+                line_shape.line.width = px_to_pt(stroke_width_px)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set {log_prefix} width: {e}")
+        try:
+            if has_shadow:
+                line_shape.shadow.inherit = True
+            else:
+                line_shape.shadow.inherit = False
+                self._disable_shadow_xml(line_shape)
+        except Exception:
+            if not has_shadow:
+                self._disable_shadow_xml(line_shape)
+
     def _add_line_shape(self, slide, shape: ShapeElement):
         """Add line shape (draw.io line vertex) as a connector."""
-        # Determine orientation (default to horizontal).
         if shape.w >= shape.h:
             y = shape.y + (shape.h / 2.0)
             x1, y1 = shape.x, y
@@ -562,44 +544,13 @@ class PPTXWriter:
 
         line = slide.shapes.add_connector(
             MSO_CONNECTOR.STRAIGHT,
-            px_to_emu(x1),
-            px_to_emu(y1),
-            px_to_emu(x2),
-            px_to_emu(y2),
+            px_to_emu(x1), px_to_emu(y1), px_to_emu(x2), px_to_emu(y2),
         )
-
-        try:
-            if shape.id:
-                line.name = f"drawio2pptx:line:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set line name: {e}")
-
+        self._set_shape_name(line, f"drawio2pptx:line:{shape.id}" if shape.id else None)
         stroke_color = shape.style.stroke if shape.style.stroke else RGBColor(0, 0, 0)
-        try:
-            line.line.fill.solid()
-            self._set_edge_stroke_color_xml(line, stroke_color)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set line stroke color: {e}")
-
-        if shape.style.stroke_width > 0:
-            try:
-                line.line.width = px_to_pt(shape.style.stroke_width)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set line width: {e}")
-
-        try:
-            if shape.style.has_shadow:
-                line.shadow.inherit = True
-            else:
-                line.shadow.inherit = False
-                self._disable_shadow_xml(line)
-        except Exception:
-            if not shape.style.has_shadow:
-                self._disable_shadow_xml(line)
-
+        self._apply_line_style_to_connector(
+            line, stroke_color, shape.style.stroke_width, shape.style.has_shadow, log_prefix="line",
+        )
         return line
 
     def _add_swimlane_header_divider(
@@ -635,38 +586,9 @@ class PPTXWriter:
             px_to_emu(x2),
             px_to_emu(y2),
         )
-        try:
-            if shape.id:
-                line.name = f"drawio2pptx:swimlane-divider:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set swimlane divider name: {e}")
-
-        try:
-            line.line.fill.solid()
-            self._set_stroke_color_xml(line, stroke_color)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set swimlane divider color: {e}")
-
-        if stroke_width_px and stroke_width_px > 0:
-            try:
-                line.line.width = px_to_pt(stroke_width_px)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set swimlane divider width: {e}")
-
-        # Shadow follows swimlane shape
-        try:
-            if getattr(shape.style, "has_shadow", False):
-                line.shadow.inherit = True
-            else:
-                line.shadow.inherit = False
-                self._disable_shadow_xml(line)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set swimlane divider shadow: {e}")
-
+        self._set_shape_name(line, f"drawio2pptx:swimlane-divider:{shape.id}" if shape.id else None)
+        has_shadow = getattr(shape.style, "has_shadow", False)
+        self._apply_line_style_to_connector(line, stroke_color, stroke_width_px, has_shadow, log_prefix="swimlane divider")
         return line
     
     def _add_connector(self, slide, connector: ConnectorElement):
@@ -688,44 +610,18 @@ class PPTXWriter:
         if len(points_px) >= 2 and self._is_almost_straight(points_px, tol_px=0.5):
             return self._add_straight_connector(slide, connector, points_px)
 
-        # Arrow settings may affect geometry (open-oval marker needs endpoint trimming).
+        (
+            line_points_px,
+            add_open_oval_start,
+            add_open_oval_end,
+            effective_start_arrow,
+            effective_end_arrow,
+            start_marker_center_px,
+            end_marker_center_px,
+        ) = self._compute_open_oval_trimmed_points(connector, points_px)
         start_arrow = connector.style.arrow_start
         end_arrow = connector.style.arrow_end
 
-        # PowerPoint line-end types cannot represent "open" (unfilled) oval markers.
-        # When draw.io specifies startFill/endFill=0 with oval, emulate it by overlaying a small
-        # ellipse outline at the endpoint, and suppress the line-end arrow.
-        add_open_oval_start = self._should_emulate_open_oval_marker(start_arrow, connector.style.arrow_start_fill)
-        add_open_oval_end = self._should_emulate_open_oval_marker(end_arrow, connector.style.arrow_end_fill)
-        effective_start_arrow = None if add_open_oval_start else start_arrow
-        effective_end_arrow = None if add_open_oval_end else end_arrow
-
-        # Keep marker centers at the original endpoints, but trim the line so it stops at the marker boundary.
-        start_marker_center_px = connector.points[0]
-        end_marker_center_px = connector.points[-1]
-        line_points_px = list(points_px)
-        if add_open_oval_start or add_open_oval_end:
-            try:
-                start_trim = (
-                    self._open_oval_trim_radius_px(
-                        stroke_width_px=connector.style.stroke_width,
-                        arrow_size_px=connector.style.arrow_start_size_px,
-                    )
-                    if add_open_oval_start
-                    else 0.0
-                )
-                end_trim = (
-                    self._open_oval_trim_radius_px(
-                        stroke_width_px=connector.style.stroke_width,
-                        arrow_size_px=connector.style.arrow_end_size_px,
-                    )
-                    if add_open_oval_end
-                    else 0.0
-                )
-                line_points_px = self._trim_polyline_endpoints_px(line_points_px, start_trim, end_trim)
-            except Exception:
-                line_points_px = list(connector.points)
-        
         # For normal lines (straight), use FreeformBuilder
         # Convert points to EMU
         points_emu = [(px_to_emu(x), px_to_emu(y)) for x, y in line_points_px]
@@ -746,109 +642,38 @@ class PPTXWriter:
         except Exception:
             return None
 
-        # Debug-friendly name (not visible in normal slideshow mode).
-        try:
-            if connector.id:
-                line_shape.name = f"drawio2pptx:connector:{connector.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set connector name: {e}")
-        
-        # Set stroke
-        # Use black as default if stroke is None
-        stroke_color = connector.style.stroke if connector.style.stroke else RGBColor(0, 0, 0)
-        try:
-            line_shape.line.fill.solid()
-            self._set_edge_stroke_color_xml(line_shape, stroke_color)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set connector stroke color: {e}")
-        
-        if connector.style.stroke_width > 0:
-            try:
-                line_shape.line.width = px_to_pt(connector.style.stroke_width)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set connector stroke width: {e}")
-        
-        # Disable fill
-        try:
-            line_shape.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to disable connector fill: {e}")
-        
-        # Set dash pattern
-        if connector.style.dash:
-            try:
-                self._set_dash_pattern_xml(line_shape, connector.style.dash)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set connector dash pattern: {e}")
-        
-        if effective_start_arrow or effective_end_arrow:
-            self._set_arrow_heads_xml(
-                line_shape,
-                effective_start_arrow,
-                effective_end_arrow,
-                connector.style.arrow_start_fill,
-                connector.style.arrow_end_fill,
-                connector.style.stroke,
-                connector.style.arrow_start_size_px,
-                connector.style.arrow_end_size_px,
-            )
+        self._set_shape_name(line_shape, f"drawio2pptx:connector:{connector.id}" if connector.id else None)
 
-        # Overlay open-oval markers after the connector so it sits on top of the line geometry.
-        marker_configs = {
-            "start": (add_open_oval_start, start_marker_center_px, start_arrow, connector.style.arrow_start_size_px),
-            "end": (add_open_oval_end, end_marker_center_px, end_arrow, connector.style.arrow_end_size_px),
-        }
-        for position, (should_add, center_px, arrow_name, arrow_size_px) in marker_configs.items():
-            if should_add:
-                x, y = center_px
-                self._add_open_oval_marker(
-                    slide=slide,
-                    x_px=x,
-                    y_px=y,
-                    stroke_color=connector.style.stroke,
-                    stroke_width_px=connector.style.stroke_width,
-                    arrow_name=arrow_name,
-                    arrow_size_px=arrow_size_px,
-                    marker_name=f"drawio2pptx:marker:open-oval:{connector.id}:{position}",
-                )
-        
-        # Shadow settings (similar to legacy: disable shadow when has_shadow is False)
-        try:
-            if connector.style.has_shadow:
-                # Enable shadow (inherit from theme)
-                line_shape.shadow.inherit = True
-            else:
-                # Disable shadow
-                line_shape.shadow.inherit = False
-                # Disable shadow via XML (similar to legacy _disable_shadow_xml)
-                self._disable_shadow_xml(line_shape)
-        except Exception:
-            if not connector.style.has_shadow:
-                self._disable_shadow_xml(line_shape)
-        
+        self._apply_connector_line_style(
+            line_shape, connector,
+            effective_start_arrow=effective_start_arrow,
+            effective_end_arrow=effective_end_arrow,
+        )
+
+        self._add_open_oval_markers_for_connector(
+            slide, connector,
+            add_open_oval_start, add_open_oval_end,
+            start_marker_center_px, end_marker_center_px,
+            start_arrow, end_arrow,
+        )
+
         return line_shape
 
-    def _add_straight_connector(self, slide, connector: ConnectorElement, points_px: List[Tuple[float, float]]):
-        """Add a single straight connector (line) between endpoints."""
-        if len(points_px) < 2:
-            return None
-
-        # Arrow settings may affect geometry (open-oval marker needs endpoint trimming).
+    def _compute_open_oval_trimmed_points(
+        self, connector: ConnectorElement, points_px: List[Tuple[float, float]]
+    ) -> Tuple[
+        List[Tuple[float, float]], bool, bool, Optional[str], Optional[str],
+        Tuple[float, float], Tuple[float, float],
+    ]:
+        """Compute trimmed line points and open-oval flags. Returns (line_points_px, add_start, add_end, eff_start_arrow, eff_end_arrow, start_center_px, end_center_px)."""
         start_arrow = connector.style.arrow_start
         end_arrow = connector.style.arrow_end
-
         add_open_oval_start = self._should_emulate_open_oval_marker(start_arrow, connector.style.arrow_start_fill)
         add_open_oval_end = self._should_emulate_open_oval_marker(end_arrow, connector.style.arrow_end_fill)
         effective_start_arrow = None if add_open_oval_start else start_arrow
         effective_end_arrow = None if add_open_oval_end else end_arrow
-
-        start_marker_center_px = points_px[0]
-        end_marker_center_px = points_px[-1]
+        start_center_px = points_px[0]
+        end_center_px = points_px[-1]
         line_points_px = list(points_px)
         if add_open_oval_start or add_open_oval_end:
             try:
@@ -871,6 +696,32 @@ class PPTXWriter:
                 line_points_px = self._trim_polyline_endpoints_px(line_points_px, start_trim, end_trim)
             except Exception:
                 line_points_px = list(points_px)
+        return (
+            line_points_px,
+            add_open_oval_start,
+            add_open_oval_end,
+            effective_start_arrow,
+            effective_end_arrow,
+            start_center_px,
+            end_center_px,
+        )
+
+    def _add_straight_connector(self, slide, connector: ConnectorElement, points_px: List[Tuple[float, float]]):
+        """Add a single straight connector (line) between endpoints."""
+        if len(points_px) < 2:
+            return None
+
+        (
+            line_points_px,
+            add_open_oval_start,
+            add_open_oval_end,
+            effective_start_arrow,
+            effective_end_arrow,
+            start_marker_center_px,
+            end_marker_center_px,
+        ) = self._compute_open_oval_trimmed_points(connector, points_px)
+        start_arrow = connector.style.arrow_start
+        end_arrow = connector.style.arrow_end
 
         if len(line_points_px) < 2:
             return None
@@ -883,62 +734,40 @@ class PPTXWriter:
             px_to_emu(y2),
         )
 
-        try:
-            if connector.id:
-                line_shape.name = f"drawio2pptx:connector:{connector.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set connector name: {e}")
+        self._set_shape_name(line_shape, f"drawio2pptx:connector:{connector.id}" if connector.id else None)
 
-        # Set stroke
-        stroke_color = connector.style.stroke if connector.style.stroke else RGBColor(0, 0, 0)
-        try:
-            line_shape.line.fill.solid()
-            self._set_edge_stroke_color_xml(line_shape, stroke_color)
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set connector stroke color: {e}")
+        self._apply_connector_line_style(
+            line_shape, connector,
+            effective_start_arrow=effective_start_arrow,
+            effective_end_arrow=effective_end_arrow,
+        )
 
-        if connector.style.stroke_width > 0:
-            try:
-                line_shape.line.width = px_to_pt(connector.style.stroke_width)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set connector stroke width: {e}")
+        self._add_open_oval_markers_for_connector(
+            slide, connector,
+            add_open_oval_start, add_open_oval_end,
+            start_marker_center_px, end_marker_center_px,
+            start_arrow, end_arrow,
+        )
 
-        # Disable fill
-        try:
-            line_shape.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to disable connector fill: {e}")
+        return line_shape
 
-        # Set dash pattern
-        if connector.style.dash:
-            try:
-                self._set_dash_pattern_xml(line_shape, connector.style.dash)
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to set connector dash pattern: {e}")
-
-        if effective_start_arrow or effective_end_arrow:
-            self._set_arrow_heads_xml(
-                line_shape,
-                effective_start_arrow,
-                effective_end_arrow,
-                connector.style.arrow_start_fill,
-                connector.style.arrow_end_fill,
-                connector.style.stroke,
-                connector.style.arrow_start_size_px,
-                connector.style.arrow_end_size_px,
-            )
-
-        # Overlay open-oval markers after the connector so it sits on top of the line geometry.
-        marker_configs = {
-            "start": (add_open_oval_start, start_marker_center_px, start_arrow, connector.style.arrow_start_size_px),
-            "end": (add_open_oval_end, end_marker_center_px, end_arrow, connector.style.arrow_end_size_px),
-        }
-        for position, (should_add, center_px, arrow_name, arrow_size_px) in marker_configs.items():
+    def _add_open_oval_markers_for_connector(
+        self,
+        slide,
+        connector: ConnectorElement,
+        add_open_oval_start: bool,
+        add_open_oval_end: bool,
+        start_center_px: Tuple[float, float],
+        end_center_px: Tuple[float, float],
+        start_arrow: Optional[str],
+        end_arrow: Optional[str],
+    ) -> None:
+        """Add open-oval overlay markers at connector endpoints when needed."""
+        marker_configs = [
+            ("start", add_open_oval_start, start_center_px, start_arrow, connector.style.arrow_start_size_px),
+            ("end", add_open_oval_end, end_center_px, end_arrow, connector.style.arrow_end_size_px),
+        ]
+        for position, should_add, center_px, arrow_name, arrow_size_px in marker_configs:
             if should_add:
                 x, y = center_px
                 self._add_open_oval_marker(
@@ -952,18 +781,63 @@ class PPTXWriter:
                     marker_name=f"drawio2pptx:marker:open-oval:{connector.id}:{position}",
                 )
 
-        # Shadow settings
+    def _apply_connector_line_style(
+        self,
+        line_shape,
+        connector: ConnectorElement,
+        effective_start_arrow: Optional[str] = None,
+        effective_end_arrow: Optional[str] = None,
+        arrow_start_fill: Optional[bool] = None,
+        arrow_end_fill: Optional[bool] = None,
+        arrow_start_size_px: Optional[float] = None,
+        arrow_end_size_px: Optional[float] = None,
+    ) -> None:
+        """Apply stroke, fill off, dash, arrows, and shadow to a connector/line shape.
+        Arrow fill/size default to connector.style when omitted (e.g. for single-segment connectors).
+        """
+        style = connector.style
+        stroke_color = style.stroke if style.stroke else RGBColor(0, 0, 0)
         try:
-            if connector.style.has_shadow:
+            line_shape.line.fill.solid()
+            self._set_edge_stroke_color_xml(line_shape, stroke_color)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set connector stroke color: {e}")
+        if style.stroke_width > 0:
+            try:
+                line_shape.line.width = px_to_pt(style.stroke_width)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector stroke width: {e}")
+        try:
+            line_shape.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to disable connector fill: {e}")
+        if style.dash:
+            try:
+                self._set_dash_pattern_xml(line_shape, style.dash)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set connector dash pattern: {e}")
+        start_fill = arrow_start_fill if arrow_start_fill is not None else style.arrow_start_fill
+        end_fill = arrow_end_fill if arrow_end_fill is not None else style.arrow_end_fill
+        start_sz = arrow_start_size_px if arrow_start_size_px is not None else style.arrow_start_size_px
+        end_sz = arrow_end_size_px if arrow_end_size_px is not None else style.arrow_end_size_px
+        if effective_start_arrow or effective_end_arrow:
+            self._set_arrow_heads_xml(
+                line_shape, effective_start_arrow, effective_end_arrow,
+                start_fill, end_fill, style.stroke, start_sz, end_sz,
+            )
+        try:
+            if style.has_shadow:
                 line_shape.shadow.inherit = True
             else:
                 line_shape.shadow.inherit = False
                 self._disable_shadow_xml(line_shape)
         except Exception:
-            if not connector.style.has_shadow:
+            if not style.has_shadow:
                 self._disable_shadow_xml(line_shape)
-
-        return line_shape
 
     @staticmethod
     def _simplify_polyline_points(points: List[Tuple[float, float]], tol_px: float = 0.5) -> List[Tuple[float, float]]:
@@ -1023,26 +897,10 @@ class PPTXWriter:
         top = px_to_emu(text_element.y)
         width = px_to_emu(text_element.w)
         height = px_to_emu(text_element.h)
-
-        tb = slide.shapes.add_textbox(left, top, width, height)
-        try:
-            if text_element.id:
-                tb.name = f"drawio2pptx:text:{text_element.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set text box name: {e}")
-
-        # Make the text box background transparent.
-        try:
-            tb.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set text box fill background: {e}")
-        try:
-            tb.line.fill.background()
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set text box line background: {e}")
+        tb = self._add_transparent_textbox(
+            slide, left, top, width, height,
+            f"drawio2pptx:text:{text_element.id}" if text_element.id else None,
+        )
 
         if text_element.text:
             self._set_text_frame(
@@ -1092,12 +950,7 @@ class PPTXWriter:
             if self.logger:
                 self.logger.debug(f"Failed to set horizontal line properties: {e}")
 
-        try:
-            if shape.id:
-                h_line.name = f"drawio2pptx:bpmn-symbol-h:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set horizontal line name: {e}")
+        self._set_shape_name(h_line, f"drawio2pptx:bpmn-symbol-h:{shape.id}" if shape.id else None)
 
         try:
             v_line.line.fill.solid()
@@ -1111,12 +964,7 @@ class PPTXWriter:
             if self.logger:
                 self.logger.debug(f"Failed to set vertical line properties: {e}")
 
-        try:
-            if shape.id:
-                v_line.name = f"drawio2pptx:bpmn-symbol-v:{shape.id}"
-        except Exception as e:
-            if self.logger:
-                self.logger.debug(f"Failed to set vertical line name: {e}")
+        self._set_shape_name(v_line, f"drawio2pptx:bpmn-symbol-v:{shape.id}" if shape.id else None)
     
     def _add_orthogonal_connector(self, slide, connector: ConnectorElement):
         """Add polyline as straight connectors for each segment"""
@@ -1170,85 +1018,34 @@ class PPTXWriter:
                     x1_emu, y1_emu, x2_emu, y2_emu
                 )
 
-                # Debug-friendly name (not visible in normal slideshow mode).
-                try:
-                    if connector.id:
-                        conn_shape.name = f"drawio2pptx:connector:{connector.id}:seg:{idx}"
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to set connector segment name: {e}")
-                
-                # Set stroke
-                # Use black as default if stroke is None
-                stroke_color = connector.style.stroke if connector.style.stroke else RGBColor(0, 0, 0)
-                try:
-                    conn_shape.line.fill.solid()
-                    self._set_edge_stroke_color_xml(conn_shape, stroke_color)
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to set connector segment stroke color: {e}")
-                
-                if connector.style.stroke_width > 0:
-                    try:
-                        conn_shape.line.width = px_to_pt(connector.style.stroke_width)
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.debug(f"Failed to set connector segment stroke width: {e}")
-                
-                # Disable fill
-                try:
-                    conn_shape.fill.background()
-                except Exception as e:
-                    if self.logger:
-                        self.logger.debug(f"Failed to disable connector segment fill: {e}")
-                
-                # Set dash pattern
-                if connector.style.dash:
-                    try:
-                        self._set_dash_pattern_xml(conn_shape, connector.style.dash)
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.debug(f"Failed to set connector segment dash pattern: {e}")
-                
-                # Arrows: start arrow on first segment, end arrow on last segment
+                self._set_shape_name(conn_shape, f"drawio2pptx:connector:{connector.id}:seg:{idx}" if connector.id else None)
+
                 is_first_segment = idx == 0
                 is_last_segment = idx == len(segments) - 1
                 start_arrow = connector.style.arrow_start if is_first_segment else None
                 end_arrow = connector.style.arrow_end if is_last_segment else None
-                
                 if start_arrow or end_arrow:
-                    # Suppress oval line-end when it is unfilled, and emulate with an overlay marker later.
                     add_open_oval_start = self._should_emulate_open_oval_marker(
                         start_arrow, connector.style.arrow_start_fill if is_first_segment else False
                     )
                     add_open_oval_end = self._should_emulate_open_oval_marker(
                         end_arrow, connector.style.arrow_end_fill if is_last_segment else False
                     )
-                    effective_start_arrow = None if add_open_oval_start else start_arrow
-                    effective_end_arrow = None if add_open_oval_end else end_arrow
+                    eff_start = None if add_open_oval_start else start_arrow
+                    eff_end = None if add_open_oval_end else end_arrow
+                else:
+                    eff_start, eff_end = None, None
 
-                    self._set_arrow_heads_xml(
-                        conn_shape,
-                        effective_start_arrow,
-                        effective_end_arrow,
-                        connector.style.arrow_start_fill if is_first_segment else False,
-                        connector.style.arrow_end_fill if is_last_segment else False,
-                        connector.style.stroke,
-                        connector.style.arrow_start_size_px if is_first_segment else None,
-                        connector.style.arrow_end_size_px if is_last_segment else None,
-                    )
-                
-                # Shadow
-                try:
-                    if connector.style.has_shadow:
-                        conn_shape.shadow.inherit = True
-                    else:
-                        conn_shape.shadow.inherit = False
-                        self._disable_shadow_xml(conn_shape)
-                except Exception:
-                    if not connector.style.has_shadow:
-                        self._disable_shadow_xml(conn_shape)
-                
+                self._apply_connector_line_style(
+                    conn_shape, connector,
+                    effective_start_arrow=eff_start,
+                    effective_end_arrow=eff_end,
+                    arrow_start_fill=connector.style.arrow_start_fill if is_first_segment else False,
+                    arrow_end_fill=connector.style.arrow_end_fill if is_last_segment else False,
+                    arrow_start_size_px=connector.style.arrow_start_size_px if is_first_segment else None,
+                    arrow_end_size_px=connector.style.arrow_end_size_px if is_last_segment else None,
+                )
+
                 created_shapes.append(conn_shape)
             except Exception as e:
                 if self.logger:
@@ -1516,7 +1313,54 @@ class PPTXWriter:
             ET.SubElement(ln_element, _a("noFill"))
         except Exception:
             return None
-    
+
+    def _add_paragraphs_to_text_frame(
+        self,
+        text_frame,
+        paragraphs: List[TextParagraph],
+        default_highlight_color: Optional[RGBColor] = None,
+    ) -> None:
+        """Add paragraphs and runs to a text frame (after clear). Sets spacing, alignment, font, color, highlight."""
+        for para_data in paragraphs:
+            p = text_frame.add_paragraph()
+            try:
+                p.space_before = Pt(float(para_data.space_before_pt)) if getattr(para_data, "space_before_pt", None) is not None else Pt(0)
+            except Exception:
+                p.space_before = Pt(0)
+            try:
+                p.space_after = Pt(float(para_data.space_after_pt)) if getattr(para_data, "space_after_pt", None) is not None else Pt(0)
+            except Exception:
+                p.space_after = Pt(0)
+            try:
+                p.line_spacing = float(para_data.line_spacing) if para_data.line_spacing is not None else 1.0
+            except Exception:
+                p.line_spacing = 1.0
+            HORIZONTAL_ALIGN_MAP = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
+            p.alignment = HORIZONTAL_ALIGN_MAP.get(para_data.align or "center", PP_ALIGN.CENTER)
+            for run_data in para_data.runs:
+                run = p.add_run()
+                run.text = run_data.text
+                effective_font_family = run_data.font_family or DRAWIO_DEFAULT_FONT_FAMILY
+                replaced_font = replace_font(effective_font_family, config=self.config)
+                try:
+                    run.font.name = replaced_font if replaced_font else effective_font_family
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"Failed to set font: {e}")
+                if run_data.font_size:
+                    run.font.size = Pt(scale_font_size_for_pptx(run_data.font_size))
+                else:
+                    run.font.size = Pt(scale_font_size_for_pptx(12.0))
+                run.font.bold = run_data.bold
+                run.font.italic = run_data.italic
+                run.font.underline = run_data.underline
+                if run_data.font_color:
+                    self._set_font_color_xml(run, run_data.font_color)
+                else:
+                    self._set_font_color_xml(run, RGBColor(0, 0, 0))
+                if default_highlight_color is not None:
+                    self._set_highlight_color_xml(run, default_highlight_color)
+
     def _set_text_frame(
         self,
         text_frame,
@@ -1597,100 +1441,9 @@ class PPTXWriter:
                 first_p._element.getparent().remove(first_p._element)
             except Exception:
                 break
-        
-        # Add paragraphs
-        for para_data in paragraphs:
-            p = text_frame.add_paragraph()
-            # Paragraph spacing: default to 0 to keep existing behavior unless the parser requests spacing.
-            try:
-                if getattr(para_data, "space_before_pt", None) is not None:
-                    p.space_before = Pt(float(para_data.space_before_pt))
-                else:
-                    p.space_before = Pt(0)
-            except Exception:
-                p.space_before = Pt(0)
-            try:
-                if getattr(para_data, "space_after_pt", None) is not None:
-                    p.space_after = Pt(float(para_data.space_after_pt))
-                else:
-                    p.space_after = Pt(0)
-            except Exception:
-                p.space_after = Pt(0)
 
-            # Line spacing: keep legacy default unless explicitly provided.
-            try:
-                if para_data.line_spacing is not None:
-                    p.line_spacing = float(para_data.line_spacing)
-                else:
-                    p.line_spacing = 1.0
-            except Exception:
-                p.line_spacing = 1.0
-            
-            # Horizontal alignment
-            HORIZONTAL_ALIGN_MAP = {
-                "left": PP_ALIGN.LEFT,
-                "center": PP_ALIGN.CENTER,
-                "right": PP_ALIGN.RIGHT,
-            }
-            p.alignment = HORIZONTAL_ALIGN_MAP.get(
-                para_data.align or "center", PP_ALIGN.CENTER
-            )
-            
-            # Add runs
-            for run_data in para_data.runs:
-                run = p.add_run()
-                run.text = run_data.text
-                
-                # Font family
-                # If run_data.font_family is None or empty string, use draw.io's default font (Helvetica)
-                # This ensures the same font is used in draw.io and PowerPoint
-                effective_font_family = run_data.font_family or DRAWIO_DEFAULT_FONT_FAMILY
-                replaced_font = replace_font(effective_font_family, config=self.config)
-                if replaced_font:
-                    try:
-                        run.font.name = replaced_font
-                    except Exception as e:
-                        # Log if font setting fails (for debugging)
-                        if self.logger:
-                            self.logger.warning(f"Failed to set font '{replaced_font}': {e}")
-                        # Continue processing even if font setting fails
-                        pass
-                else:
-                    # If replace_font returns None, try the original font name
-                    try:
-                        run.font.name = effective_font_family
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.warning(f"Failed to set font '{effective_font_family}': {e}")
-                        pass
-                
-                # Font size
-                # Scale draw.io font size for PowerPoint (considering coordinate transformation)
-                if run_data.font_size:
-                    scaled_font_size = scale_font_size_for_pptx(run_data.font_size)
-                    run.font.size = Pt(scaled_font_size)
-                else:
-                    # Also scale default font size (12pt)
-                    scaled_default_size = scale_font_size_for_pptx(12.0)
-                    run.font.size = Pt(scaled_default_size)
-                
-                # Font style (explicitly set)
-                run.font.bold = run_data.bold
-                run.font.italic = run_data.italic
-                run.font.underline = run_data.underline
-                
-                # Font color (similar to legacy: always set via XML when font color is set)
-                if run_data.font_color:
-                    self._set_font_color_xml(run, run_data.font_color)
-                else:
-                    # Set default black color even when font color is not set (legacy behavior)
-                    default_black = RGBColor(0, 0, 0)
-                    self._set_font_color_xml(run, default_black)
+        self._add_paragraphs_to_text_frame(text_frame, paragraphs, default_highlight_color)
 
-                # draw.io labelBackgroundColor -> PPTX highlight (best effort).
-                if default_highlight_color is not None:
-                    self._set_highlight_color_xml(run, default_highlight_color)
-        
         # Reset vertical_anchor (similar to legacy: set after clear())
         # vertical_anchor is reset after tf.clear(), so need to set again
         text_frame.vertical_anchor = saved_vertical_anchor

@@ -84,8 +84,15 @@ def html_to_paragraphs(html_text: str, default_font_color: RGBColor = None,
             if tag not in block_tags:
                 continue
             if tag == "br":
-                # Explicit line break: add an empty paragraph (PowerPoint will keep spacing).
-                paragraphs.append(TextParagraph(runs=[TextRun(text="")]))
+                # If there is text before (parsed.text) or after (child.tail) this br, let the
+                # fallback below handle "text<br>tail" so we get multiple paragraphs.
+                has_text_around_br = (
+                    (parsed.text and parsed.text.strip())
+                    or (getattr(child, "tail", None) and (child.tail or "").strip())
+                )
+                if not has_text_around_br:
+                    # Standalone <br>: add an empty paragraph (PowerPoint will keep spacing).
+                    paragraphs.append(TextParagraph(runs=[TextRun(text="")]))
                 continue
 
             # Headings: make them bold and (best-effort) larger.
@@ -152,6 +159,16 @@ def html_to_paragraphs(html_text: str, default_font_color: RGBColor = None,
                     tag = (getattr(child, "tag", "") or "").lower()
                     if tag == "br":
                         _flush_current_runs()
+                        # Text after <br> (e.g. "Lamp<br>plugged in?" -> "plugged in?" on next line)
+                        if getattr(child, "tail", None) and (child.tail or "").strip():
+                            current_runs.append(
+                                TextRun(
+                                    text=child.tail,
+                                    font_color=default_font_color,
+                                    font_family=default_font_family,
+                                    font_size=default_font_size,
+                                )
+                            )
                         continue
 
                     if tag == "div":

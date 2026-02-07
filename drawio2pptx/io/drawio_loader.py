@@ -201,97 +201,56 @@ class StyleExtractor:
             except (ValueError, TypeError):
                 pass
         return result
-    
+
+    def _get_attr_or_style_value(self, cell: ET.Element, key: str) -> Optional[str]:
+        """Get key from cell attribute or from style string. Returns None if missing."""
+        val = cell.attrib.get(key)
+        if val is not None:
+            return val
+        style = cell.attrib.get("style", "")
+        return self.extract_style_value(style, key)
+
+    def _parse_color_value(self, value: Optional[str], allow_default: bool = True) -> Optional[Any]:
+        """
+        Parse a color string to RGBColor, "default", or None.
+        When allow_default is False, only "none" and parse are considered (no "default" string).
+        """
+        if not value:
+            return None
+        low = value.strip().lower()
+        if low == "none":
+            return None
+        if allow_default and low in ("default", "auto"):
+            return "default"
+        return self.color_parser.parse(value.strip())
+
     def extract_fill_color(self, cell: ET.Element) -> Optional[Any]:
         """
-        Extract fillColor
-        
-        Returns:
-            RGBColor object (when color is specified), "default" (when default/auto), None (when transparent)
+        Extract fillColor. Returns RGBColor, "default", or None.
         """
-        # Get from direct attribute
-        fill_color = cell.attrib.get("fillColor")
-        if fill_color:
-            fill_color_lower = fill_color.lower().strip()
-            if fill_color_lower in ["default", "auto"]:
-                return "default"
-            elif fill_color_lower == "none":
-                return None
-            else:
-                parsed = self.color_parser.parse(fill_color)
-                if parsed:
-                    return parsed
-        
-        # Get from style attribute
+        raw = self._get_attr_or_style_value(cell, "fillColor")
+        result = self._parse_color_value(raw)
+        if result is not None:
+            return result
         style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "fillColor":
-                        value_lower = value.strip().lower()
-                        if value_lower in ["default", "auto"]:
-                            return "default"
-                        elif value_lower == "none":
-                            return None
-                        else:
-                            parsed = self.color_parser.parse(value.strip())
-                            if parsed:
-                                return parsed
-        # Text shapes should be transparent unless fillColor is explicit.
         try:
             if self.is_text_style(style):
                 return None
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to check text style for fill: {e}")
-        # If fillColor is omitted, draw.io uses a default fill for most vertex shapes.
-        # Treat missing fillColor as "default" for vertices, but keep edges transparent.
         try:
             if cell.attrib.get("vertex") == "1" and cell.attrib.get("edge") != "1":
                 return "default"
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to check vertex attribute: {e}")
-
         return None
 
     def extract_gradient_color(self, cell: ET.Element) -> Optional[Any]:
-        """
-        Extract gradientColor
-
-        Returns:
-            RGBColor object (when color is specified), "default" (when default/auto), None (when no gradient/none)
-        """
-        # Direct attribute (rare, but keep consistent with fillColor)
-        grad_color = cell.attrib.get("gradientColor")
-        if grad_color:
-            grad_color_lower = grad_color.lower().strip()
-            if grad_color_lower in ["default", "auto"]:
-                return "default"
-            if grad_color_lower == "none":
-                return None
-            parsed = self.color_parser.parse(grad_color)
-            if parsed:
-                return parsed
-
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "gradientColor":
-                        value_lower = value.strip().lower()
-                        if value_lower in ["default", "auto"]:
-                            return "default"
-                        if value_lower == "none":
-                            return None
-                        parsed = self.color_parser.parse(value.strip())
-                        if parsed:
-                            return parsed
-                        return None
-
-        return None
+        """Extract gradientColor. Returns RGBColor, "default", or None."""
+        raw = self._get_attr_or_style_value(cell, "gradientColor")
+        return self._parse_color_value(raw)
 
     def extract_gradient_direction(self, cell: ET.Element) -> Optional[str]:
         """Extract gradientDirection (e.g., north/south/east/west)"""
@@ -302,76 +261,26 @@ class StyleExtractor:
         return value.strip() if value else None
 
     def extract_swimlane_fill_color(self, cell: ET.Element) -> Optional[Any]:
-        """
-        Extract swimlaneFillColor (body area fill). Header uses fillColor.
-        Returns: RGBColor, "default", or None (treated as white).
-        """
-        style = cell.attrib.get("style", "")
-        if not style:
-            return None
-        value = self.extract_style_value(style, "swimlaneFillColor")
-        if not value:
-            return None
-        value_lower = value.strip().lower()
-        if value_lower in ["default", "auto"]:
-            return "default"
-        if value_lower == "none":
-            return None
-        parsed = self.color_parser.parse(value.strip())
-        return parsed
-    
+        """Extract swimlaneFillColor (body area fill). Returns RGBColor, "default", or None."""
+        raw = self.extract_style_value(cell.attrib.get("style", ""), "swimlaneFillColor")
+        return self._parse_color_value(raw) if raw else None
+
     def extract_stroke_color(self, cell: ET.Element) -> Optional[RGBColor]:
-        """Extract strokeColor"""
-        stroke_color = cell.attrib.get("strokeColor")
-        if stroke_color:
-            parsed = self.color_parser.parse(stroke_color)
-            if parsed:
-                return parsed
-        
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "strokeColor":
-                        parsed = self.color_parser.parse(value.strip())
-                        if parsed:
-                            return parsed
-        
-        return None
+        """Extract strokeColor. Returns RGBColor or None."""
+        return self._parse_color_value(self._get_attr_or_style_value(cell, "strokeColor"), allow_default=False)
 
     def extract_no_stroke(self, cell: ET.Element) -> bool:
         """Detect strokeColor=none explicitly set on the cell."""
-        stroke_color = (cell.attrib.get("strokeColor") or "").strip().lower()
-        if stroke_color == "none":
-            return True
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "strokeColor" and value.strip().lower() == "none":
-                        return True
-        return False
-    
+        raw = self._get_attr_or_style_value(cell, "strokeColor")
+        return raw is not None and raw.strip().lower() == "none"
+
     def extract_font_color(self, cell: ET.Element) -> Optional[RGBColor]:
-        """Extract fontColor (also checks inside HTML tags)"""
-        font_color = cell.attrib.get("fontColor")
-        if font_color:
-            parsed = self.color_parser.parse(font_color)
+        """Extract fontColor (also checks inside HTML tags)."""
+        raw = self._get_attr_or_style_value(cell, "fontColor")
+        if raw:
+            parsed = self.color_parser.parse(raw)
             if parsed:
                 return parsed
-        
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "fontColor":
-                        parsed = self.color_parser.parse(value.strip())
-                        if parsed:
-                            return parsed
-        
         # Get from style attribute in HTML tags (for Square/Circle support)
         value = cell.attrib.get("value", "")
         if value and "<font" in value:
@@ -395,35 +304,14 @@ class StyleExtractor:
         return None
 
     def extract_label_background_color(self, cell: ET.Element) -> Optional[RGBColor]:
-        """Extract labelBackgroundColor (draw.io label background color; equivalent to highlight)"""
-        label_bg = cell.attrib.get("labelBackgroundColor")
-        if label_bg:
-            parsed = self.color_parser.parse(label_bg)
-            if parsed:
-                return parsed
+        """Extract labelBackgroundColor (draw.io label background color; equivalent to highlight)."""
+        return self._parse_color_value(self._get_attr_or_style_value(cell, "labelBackgroundColor"), allow_default=False)
 
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "labelBackgroundColor":
-                        parsed = self.color_parser.parse(value.strip())
-                        if parsed:
-                            return parsed
-                        return None
-        return None
-    
     def extract_shadow(self, cell: ET.Element, mgm_root: Optional[ET.Element]) -> bool:
-        """Extract shadow setting"""
-        style = cell.attrib.get("style", "")
-        if style:
-            for part in style.split(";"):
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    if key.strip() == "shadow":
-                        return value.strip() == "1"
-        
+        """Extract shadow setting."""
+        val = self._get_attr_or_style_value(cell, "shadow")
+        if val is not None and val.strip() == "1":
+            return True
         if mgm_root is not None:
             mgm_shadow = mgm_root.attrib.get("shadow")
             if mgm_shadow == "1":
@@ -603,32 +491,17 @@ class DrawIOLoader:
         
         return (None, None)
     
-    def extract_elements(self, mgm_root: ET.Element) -> List[BaseElement]:
+    def _build_cell_index_and_draw_order(
+        self, mgm_root: ET.Element
+    ) -> tuple[List[ET.Element], Dict[str, ET.Element], Dict[str, int], Dict[str, List[str]], set, Dict[str, int]]:
         """
-        Extract elements from mxGraphModel and convert to intermediate model
-        
-        Args:
-            mgm_root: mxGraphModel element
-        
-        Returns:
-            List of elements
+        Build cell index, parent->children map, container set, and z-order from mxGraphModel.
+        Returns (cells, cell_by_id, document_order, children_by_parent, container_vertex_ids, cell_order).
         """
-        elements = []
-
-        # Preserve draw.io stacking order.
-        #
-        # In mxGraphModel, the relative stacking / draw order is primarily encoded by the order of
-        # mxCell nodes under <root>. PowerPoint stacking is determined by the order of shapes in
-        # the slide XML (later = topmost), so we map mxCell order to BaseElement.z_index.
-        #
-        # NOTE: We still extract shapes first to build shapes_dict for connector routing; z_index
-        #       sorting will restore the original order afterwards.
         cells = list(mgm_root.findall(".//mxCell"))
         cell_by_id: Dict[str, ET.Element] = {}
         document_order: Dict[str, int] = {}
         children_by_parent: Dict[str, List[str]] = {}
-
-        # Build cell index and parent->children order based on document order.
         for idx, cell in enumerate(cells):
             cid = cell.attrib.get("id")
             if cid is None:
@@ -640,24 +513,14 @@ class DrawIOLoader:
             parent_id = cell.attrib.get("parent")
             if parent_id:
                 children_by_parent.setdefault(parent_id, []).append(cid)
-
-        # Identify container-like vertices (parents of other cells).
-        parent_ids = set()
-        for cell in cells:
-            parent_id = cell.attrib.get("parent")
-            if parent_id and parent_id not in ("0", "1"):
-                parent_ids.add(parent_id)
-        container_vertex_ids = set()
+        parent_ids = {cell.attrib.get("parent") for cell in cells if cell.attrib.get("parent") and cell.attrib.get("parent") not in ("0", "1")}
+        container_vertex_ids: set = set()
         for pid in parent_ids:
             pcell = cell_by_id.get(pid)
             if pcell is None:
                 continue
             if pcell.attrib.get("vertex") == "1" and pcell.attrib.get("edge") != "1":
                 container_vertex_ids.add(pid)
-
-        # Derive draw order by traversing the parent-child hierarchy.
-        # In mxGraph, the order within a parent's children list defines z-order,
-        # and children are drawn above their parent.
         draw_order_ids: List[str] = []
         visited: set[str] = set()
 
@@ -673,13 +536,10 @@ class DrawIOLoader:
                     draw_order_ids.append(cid)
                 _append_draw_order(cid)
 
-        # Start from the root layer(s). Default layer is id="1" under root id="0".
         if "0" in children_by_parent:
             _append_draw_order("0")
         elif "1" in children_by_parent:
             _append_draw_order("1")
-
-        # Fallback to document order if traversal yielded nothing.
         if not draw_order_ids:
             for cid, _ in sorted(document_order.items(), key=lambda x: x[1]):
                 cell = cell_by_id.get(cid)
@@ -687,9 +547,17 @@ class DrawIOLoader:
                     continue
                 if cell.attrib.get("vertex") == "1" or cell.attrib.get("edge") == "1":
                     draw_order_ids.append(cid)
-
         cell_order: Dict[str, int] = {cid: idx for idx, cid in enumerate(draw_order_ids)}
-        
+        return (cells, cell_by_id, document_order, children_by_parent, container_vertex_ids, cell_order)
+
+    def extract_elements(self, mgm_root: ET.Element) -> List[BaseElement]:
+        """
+        Extract elements from mxGraphModel and convert to intermediate model.
+        Preserves draw.io stacking order via z_index; shapes are extracted first for connector routing.
+        """
+        elements: List[BaseElement] = []
+        cells, cell_by_id, _document_order, _children_by_parent, container_vertex_ids, cell_order = self._build_cell_index_and_draw_order(mgm_root)
+
         # First extract shapes
         shapes_dict = {}
         for cell in cells:
@@ -855,75 +723,94 @@ class DrawIOLoader:
             parent_y += grandparent_y
         
         return (parent_x, parent_y)
-    
-    def _extract_shape(self, cell: ET.Element, mgm_root: ET.Element) -> Optional[ShapeElement]:
-        """Extract shape"""
+
+    def _parse_geometry_from_cell(self, cell: ET.Element) -> Optional[tuple[float, float, float, float]]:
+        """Parse (x, y, width, height) from mxGeometry. Returns None if missing or invalid."""
         geo = cell.find(".//mxGeometry")
         if geo is None:
             return None
-        
         try:
             x = float(geo.attrib.get("x", "0") or 0)
             y = float(geo.attrib.get("y", "0") or 0)
             w = float(geo.attrib.get("width", "0") or 0)
             h = float(geo.attrib.get("height", "0") or 0)
+            return (x, y, w, h)
         except ValueError:
             return None
-        
-        # Add parent coordinates if parent exists
-        parent_id = cell.attrib.get("parent")
-        if parent_id and parent_id not in ("0", "1"):
-            # Handle swimlane header offsets only when the child coordinates
-            # are relative to the content area (not including header).
-            try:
-                parent_cell = None
-                for pcell in mgm_root.findall(".//mxCell"):
-                    if pcell.attrib.get("id") == parent_id:
-                        parent_cell = pcell
-                        break
-                if parent_cell is not None:
-                    parent_style = parent_cell.attrib.get("style", "") or ""
-                    if parent_style and "swimlane" in parent_style:
-                        start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0) or 0.0
-                        horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
-                        if horizontal_str is None:
-                            # draw.io default for swimlane is horizontal=1 (header on top).
-                            is_horizontal = True
-                        else:
-                            is_horizontal = horizontal_str.strip() == "1"
-                        eps = 1e-6
-                        if is_horizontal:
-                            # Header on top: only shift when child y is inside header coords.
-                            if y < start_size - eps:
-                                y += start_size
-                        else:
-                            # Header on left: only shift when child x is inside header coords.
-                            if x < start_size - eps:
-                                x += start_size
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to adjust swimlane child offset: {e}")
 
-            parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
-            x += parent_x
-            y += parent_y
-        
-        # Basic information
-        shape_id = cell.attrib.get("id")
-        text_raw = cell.attrib.get("value", "") or ""
-        
-        # Extract style
+    def _apply_shape_parent_offset(
+        self, x: float, y: float, parent_id: Optional[str], cell: ET.Element, mgm_root: ET.Element
+    ) -> tuple[float, float]:
+        """Apply parent coordinates and swimlane child offset. Returns (x, y)."""
+        if not parent_id or parent_id in ("0", "1"):
+            return (x, y)
+        try:
+            parent_cell = None
+            for pcell in mgm_root.findall(".//mxCell"):
+                if pcell.attrib.get("id") == parent_id:
+                    parent_cell = pcell
+                    break
+            if parent_cell is not None:
+                parent_style = parent_cell.attrib.get("style", "") or ""
+                if parent_style and "swimlane" in parent_style:
+                    start_size = self.style_extractor.extract_style_float(parent_style, "startSize", 0.0) or 0.0
+                    horizontal_str = self.style_extractor.extract_style_value(parent_style, "horizontal")
+                    is_horizontal = horizontal_str is None or horizontal_str.strip() == "1"
+                    eps = 1e-6
+                    if is_horizontal:
+                        if y < start_size - eps:
+                            y += start_size
+                    else:
+                        if x < start_size - eps:
+                            x += start_size
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to adjust swimlane child offset: {e}")
+        parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
+        return (x + parent_x, y + parent_y)
+
+    def _build_shape_transform(self, style_str: str, shape_type: Optional[str]) -> Transform:
+        """Build Transform (rotation, flip_h, flip_v) from style and shape type (arrow direction folded in)."""
+        try:
+            rotation = float(self.style_extractor.extract_style_float(style_str, "rotation", 0.0) or 0.0)
+        except Exception:
+            rotation = 0.0
+        flip_h = (self.style_extractor.extract_style_value(style_str, "flipH") or "").strip() == "1"
+        flip_v = (self.style_extractor.extract_style_value(style_str, "flipV") or "").strip() == "1"
+        if shape_type in ("right_arrow", "notched_right_arrow"):
+            direction = (self.style_extractor.extract_style_value(style_str, "direction") or "").strip().lower()
+            if direction:
+                dir_to_angle = {"north": 270.0, "south": 90.0, "east": 0.0, "west": 180.0}
+                if direction in dir_to_angle:
+                    rotation = dir_to_angle[direction]
+                    if flip_v:
+                        rotation = (rotation + 180.0) % 360.0
+                    if flip_h:
+                        rotation = (rotation + 180.0) % 360.0
+                    flip_h = False
+                    flip_v = False
+        return Transform(rotation=rotation, flip_h=flip_h, flip_v=flip_v)
+
+    def _extract_word_wrap_from_style(self, style_str: str) -> bool:
+        """Extract word wrap from whiteSpace style. wrap -> True, nowrap/unspecified -> False."""
+        white_space = self.style_extractor.extract_style_value(style_str, "whiteSpace")
+        if white_space is None:
+            return False
+        ws = white_space.lower().strip()
+        return ws == "wrap"
+
+    def _build_style_for_shape_cell(
+        self, cell: ET.Element, mgm_root: ET.Element, w: float, h: float, word_wrap: bool
+    ) -> Style:
+        """Build Style for a shape from cell attributes. word_wrap is passed after caller's heuristic."""
+        style_str = cell.attrib.get("style", "") or ""
         fill_color = self.style_extractor.extract_fill_color(cell)
         gradient_color = self.style_extractor.extract_gradient_color(cell)
         gradient_direction = self.style_extractor.extract_gradient_direction(cell)
         stroke_color = self.style_extractor.extract_stroke_color(cell)
-        font_color = self.style_extractor.extract_font_color(cell)
         label_bg_color = self.style_extractor.extract_label_background_color(cell)
         has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
 
-        style_str = cell.attrib.get("style", "")
-
-        # Extract BPMN symbol attribute before shape_type normalization.
         original_shape = self.style_extractor.extract_style_value(style_str, "shape")
         bpmn_symbol = None
         if original_shape and "mxgraph.bpmn.shape" in original_shape.lower():
@@ -934,58 +821,6 @@ class DrawIOLoader:
         is_text_style = self.style_extractor.is_text_style(style_str)
         no_stroke = is_text_style or self.style_extractor.extract_no_stroke(cell)
 
-        # Extract basic transform (rotation/flip) used by some vertex shapes.
-        # draw.io style keys: rotation=<deg>, flipH=1, flipV=1
-        try:
-            rotation = float(self.style_extractor.extract_style_float(style_str, "rotation", 0.0) or 0.0)
-        except Exception:
-            rotation = 0.0
-        flip_h = (self.style_extractor.extract_style_value(style_str, "flipH") or "").strip() == "1"
-        flip_v = (self.style_extractor.extract_style_value(style_str, "flipV") or "").strip() == "1"
-        # Arrow vertex shapes: draw.io uses "direction" (north/south/east/west) + flipV/flipH.
-        # PPTX arrow defaults to east (right). Arrow shapes are symmetric so flip in PPTX doesn't
-        # change tip direction; fold direction + flip into a single rotation and clear flip so the
-        # writer only applies rotation.
-        if shape_type in ("right_arrow", "notched_right_arrow"):
-            direction = (self.style_extractor.extract_style_value(style_str, "direction") or "").strip().lower()
-            if direction:
-                dir_to_angle = {"north": 270.0, "south": 90.0, "east": 0.0, "west": 180.0}
-                if direction in dir_to_angle:
-                    rotation = dir_to_angle[direction]
-                    # flipV: north<->south, flipH: east<->west
-                    if flip_v:
-                        rotation = (rotation + 180.0) % 360.0
-                    if flip_h:
-                        rotation = (rotation + 180.0) % 360.0
-                    flip_h = False
-                    flip_v = False
-        transform = Transform(rotation=rotation, flip_h=flip_h, flip_v=flip_v)
-        
-        # Extract whiteSpace (text wrapping) setting
-        # draw.io style key: whiteSpace=wrap enables text wrapping, whiteSpace=nowrap disables it.
-        #
-        # Policy in this converter:
-        # - If whiteSpace is explicitly set to "wrap": enable wrapping.
-        # - If whiteSpace is explicitly set to "nowrap": disable wrapping.
-        # - If whiteSpace is not specified: treat as "unspecified" and default to NO wrapping.
-        #
-        # Rationale: PowerPoint can wrap a single long word at the character level when wrapping is enabled,
-        # producing artifacts like "STRANGER" + "S". When draw.io doesn't explicitly request wrapping,
-        # we prefer preserving single-line labels.
-        white_space = self.style_extractor.extract_style_value(style_str, "whiteSpace")
-        if white_space is None:
-            word_wrap = False
-        else:
-            ws = white_space.lower().strip()
-            if ws == "nowrap":
-                word_wrap = False
-            elif ws == "wrap":
-                word_wrap = True
-            else:
-                # Unknown value: keep conservative behavior (no wrap).
-                word_wrap = False
-
-        # Extract overflow=hidden (draw.io). In PowerPoint, we emulate it with bodyPr overflow clipping.
         overflow_value = self.style_extractor.extract_style_value(style_str, "overflow")
         clip_text = (overflow_value or "").strip().lower() == "hidden"
         
@@ -1013,24 +848,6 @@ class DrawIOLoader:
         if vlp_str:
             vertical_label_position = vlp_str.strip().lower()
 
-        # Extract text
-        text_paragraphs = self._extract_text(text_raw, font_color, style_str)
-
-        # PowerPoint may wrap long words at the character level when word_wrap is enabled.
-        # draw.io typically does not break a single word (no whitespace) into multiple lines.
-        # Heuristic: disable wrapping for whitespace-free labels to avoid cases like
-        # "STRANGERS" -> "STRANGER" + "S".
-        if word_wrap and text_paragraphs:
-            try:
-                def _para_text(p: TextParagraph) -> str:
-                    return "".join((r.text or "") for r in (p.runs or []))
-                if all((re.search(r"\s", _para_text(p)) is None) for p in text_paragraphs):
-                    word_wrap = False
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to apply nowrap heuristic: {e}")
-        
-        # Create style
         style = Style(
             fill=fill_color,
             gradient_color=gradient_color,
@@ -1049,29 +866,52 @@ class DrawIOLoader:
             vertical_label_position=vertical_label_position,
         )
 
-        # Swimlane/container metadata (used for header layout in PPTX)
         try:
             if shape_type and shape_type.lower() == "swimlane":
                 style.is_swimlane = True
                 start_size = self.style_extractor.extract_style_float(style_str, "startSize", 0.0)
                 style.swimlane_start_size = float(start_size or 0.0)
                 horizontal_str = self.style_extractor.extract_style_value(style_str, "horizontal")
-                if horizontal_str is None:
-                    # draw.io default for swimlane is horizontal=1 (header on top).
-                    style.swimlane_horizontal = True
-                else:
-                    style.swimlane_horizontal = horizontal_str.strip() == "1"
+                style.swimlane_horizontal = horizontal_str is None or horizontal_str.strip() == "1"
                 swimlane_line_str = self.style_extractor.extract_style_value(style_str, "swimlaneLine")
-                if swimlane_line_str is None:
-                    style.swimlane_line = True
-                else:
-                    style.swimlane_line = swimlane_line_str.strip() != "0"
+                style.swimlane_line = swimlane_line_str is None or swimlane_line_str.strip() != "0"
                 style.swimlane_fill_color = self.style_extractor.extract_swimlane_fill_color(cell)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to extract swimlane metadata: {e}")
-        
-        # Create ShapeElement
+
+        return style
+
+    def _extract_shape(self, cell: ET.Element, mgm_root: ET.Element) -> Optional[ShapeElement]:
+        """Extract a shape from an mxCell vertex."""
+        geo_rect = self._parse_geometry_from_cell(cell)
+        if geo_rect is None:
+            return None
+        x, y, w, h = geo_rect
+        parent_id = cell.attrib.get("parent")
+        x, y = self._apply_shape_parent_offset(x, y, parent_id, cell, mgm_root)
+
+        shape_id = cell.attrib.get("id")
+        text_raw = cell.attrib.get("value", "") or ""
+        style_str = cell.attrib.get("style", "") or ""
+        shape_type = self.style_extractor.extract_shape_type(cell)
+        font_color = self.style_extractor.extract_font_color(cell)
+
+        transform = self._build_shape_transform(style_str, shape_type)
+        word_wrap = self._extract_word_wrap_from_style(style_str)
+        text_paragraphs = self._extract_text(text_raw, font_color, style_str)
+
+        if word_wrap and text_paragraphs:
+            try:
+                def _para_text(p: TextParagraph) -> str:
+                    return "".join((r.text or "") for r in (p.runs or []))
+                if all(re.search(r"\s", _para_text(p)) is None for p in text_paragraphs):
+                    word_wrap = False
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to apply nowrap heuristic: {e}")
+
+        style = self._build_style_for_shape_cell(cell, mgm_root, w, h, word_wrap)
         shape = ShapeElement(
             id=shape_id,
             x=x,
@@ -1082,30 +922,12 @@ class DrawIOLoader:
             text=text_paragraphs,
             style=style,
             transform=transform,
-            z_index=0  # TODO: extract z-index
+            z_index=0,
         )
-        
         return shape
-    
-    def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> tuple[Optional[ConnectorElement], List[TextElement]]:
-        """Extract connector and its labels (if present)"""
-        source_id = cell.attrib.get("source")
-        target_id = cell.attrib.get("target")
-        
-        source_shape = shapes_dict.get(source_id) if source_id else None
-        target_shape = shapes_dict.get(target_id) if target_id else None
-        
-        connector_id = cell.attrib.get("id")
-        style_str = cell.attrib.get("style", "")
-        
-        # Extract style
-        stroke_color = self.style_extractor.extract_stroke_color(cell)
-        stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
-        has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
-        font_color = self.style_extractor.extract_font_color(cell)
-        label_bg_color = self.style_extractor.extract_label_background_color(cell)
-        
-        # Edge style
+
+    def _parse_connector_edge_style(self, style_str: str) -> tuple[str, bool]:
+        """Parse edgeStyle from connector style string. Returns (edge_style, is_elbow_edge)."""
         edge_style = "straight"
         edge_style_str = self.style_extractor.extract_style_value(style_str, "edgeStyle")
         edge_style_lower = edge_style_str.lower() if edge_style_str else ""
@@ -1117,90 +939,89 @@ class DrawIOLoader:
                 edge_style = "curved"
         if "elbow" in edge_style_lower:
             is_elbow_edge = True
-        
-        # Arrow settings
+        return (edge_style, is_elbow_edge)
+
+    def _build_connector_style(self, cell: ET.Element, mgm_root: ET.Element, style_str: str) -> Style:
+        """Build Style for a connector from cell and mgm_root (stroke, arrows, dash, shadow)."""
+        stroke_color = self.style_extractor.extract_stroke_color(cell)
+        stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
+        has_shadow = self.style_extractor.extract_shadow(cell, mgm_root)
         start_arrow = self.style_extractor.extract_style_value(style_str, "startArrow")
         end_arrow = self.style_extractor.extract_style_value(style_str, "endArrow")
         start_fill = self.style_extractor.extract_style_value(style_str, "startFill") != "0"
         end_fill = self.style_extractor.extract_style_value(style_str, "endFill") != "0"
         start_size = self.style_extractor.extract_style_float(style_str, "startSize", None)
         end_size = self.style_extractor.extract_style_float(style_str, "endSize", None)
-        
-        # Dash pattern
-        # draw.io uses dashed=1 for dashed lines, or dashed=<pattern> for specific patterns
         dash_pattern = None
         dashed_value = self.style_extractor.extract_style_value(style_str, "dashed")
         if dashed_value:
-            if dashed_value == "1" or dashed_value == "true":
-                # Default dashed pattern
-                dash_pattern = "dashed"
-            else:
-                # Specific dash pattern (e.g., "dotted", "dashDot", etc.)
-                dash_pattern = dashed_value
+            dash_pattern = "dashed" if dashed_value in ("1", "true") else dashed_value
+        if end_arrow is None and mgm_root is not None and mgm_root.attrib.get("arrows") == "1":
+            end_arrow = "classic"
+        return Style(
+            stroke=stroke_color,
+            stroke_width=stroke_width,
+            dash=dash_pattern,
+            arrow_start=start_arrow,
+            arrow_end=end_arrow,
+            arrow_start_fill=start_fill,
+            arrow_end_fill=end_fill,
+            arrow_start_size_px=start_size,
+            arrow_end_size_px=end_size,
+            has_shadow=has_shadow,
+        )
 
-        # draw.io can omit default arrow styles from the edge `style` string.
-        # In diagrams.net, a newly created connector typically has an arrow at the target side by default.
-        # When the mxGraphModel sets arrows="1", treat missing endArrow as the default "classic".
-        if end_arrow is None:
-            try:
-                if mgm_root is not None and mgm_root.attrib.get("arrows") == "1":
-                    end_arrow = "classic"
-            except Exception as e:
-                if self.logger:
-                    self.logger.debug(f"Failed to check arrows attribute: {e}")
-        
-        # Extract points (execute first for automatic port determination)
+    def _parse_connector_geometry(
+        self, cell: ET.Element, mgm_root: ET.Element
+    ) -> tuple[List[tuple], Optional[tuple], Optional[tuple], List[tuple]]:
+        """
+        Parse connector mxGeometry: waypoints, sourcePoint, targetPoint.
+        Returns (points_raw, source_point, target_point, points_for_ports) in absolute coordinates.
+        """
+        points_raw: List[tuple] = []
+        points_for_ports: List[tuple] = []
+        points_raw_offset_flags: List[bool] = []
+        source_point: Optional[tuple] = None
+        target_point: Optional[tuple] = None
         geo = cell.find(".//mxGeometry")
-        points_raw = []
-        points_for_ports = []
-        points_raw_offset_flags = []
-        source_point = None
-        target_point = None
-        if geo is not None:
-            # Find Array[@as="points"] (drawio's waypoints are stored here)
-            array_elem = geo.find('./Array[@as="points"]')
-            if array_elem is not None:
-                # Find mxPoint as direct child of Array
-                for point_elem in array_elem.findall("./mxPoint"):
+        if geo is None:
+            return (points_raw, source_point, target_point, points_for_ports)
+        array_elem = geo.find('./Array[@as="points"]')
+        if array_elem is not None:
+            for point_elem in array_elem.findall("./mxPoint"):
+                px = float(point_elem.attrib.get("x", "0") or 0)
+                py = float(point_elem.attrib.get("y", "0") or 0)
+                points_raw.append((px, py))
+                points_for_ports.append((px, py))
+                points_raw_offset_flags.append(False)
+        else:
+            for point_elem in geo.findall("./mxPoint"):
+                role = (point_elem.attrib.get("as") or "").strip()
+                if role == "sourcePoint":
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
-                    points_raw.append((px, py))
-                    points_for_ports.append((px, py))
-                    points_raw_offset_flags.append(False)
-            else:
-                # If Array is not present, find mxPoint as direct child of mxGeometry.
-                # Ignore label offsets and source/target hint points; they are not waypoints.
-                for point_elem in geo.findall("./mxPoint"):
-                    role = (point_elem.attrib.get("as") or "").strip()
-                    if role == "sourcePoint":
-                        px = float(point_elem.attrib.get("x", "0") or 0)
-                        py = float(point_elem.attrib.get("y", "0") or 0)
-                        source_point = (px, py)
-                        continue
-                    if role == "targetPoint":
-                        px = float(point_elem.attrib.get("x", "0") or 0)
-                        py = float(point_elem.attrib.get("y", "0") or 0)
-                        target_point = (px, py)
-                        continue
-                    if role == "offset":
-                        continue
+                    source_point = (px, py)
+                    continue
+                if role == "targetPoint":
                     px = float(point_elem.attrib.get("x", "0") or 0)
                     py = float(point_elem.attrib.get("y", "0") or 0)
-                    points_raw.append((px, py))
-                    points_raw_offset_flags.append(False)
-                    # Only use waypoint points for port inference.
-                    points_for_ports.append((px, py))
-
-        # Waypoints are stored relative to the connector's parent. Align them to the
-        # same absolute coordinate space as shapes.
+                    target_point = (px, py)
+                    continue
+                if role == "offset":
+                    continue
+                px = float(point_elem.attrib.get("x", "0") or 0)
+                py = float(point_elem.attrib.get("y", "0") or 0)
+                points_raw.append((px, py))
+                points_raw_offset_flags.append(False)
+                points_for_ports.append((px, py))
         parent_id = cell.attrib.get("parent")
         if parent_id and parent_id not in ("0", "1") and (points_raw or source_point or target_point):
             parent_x, parent_y = self._get_parent_coordinates(parent_id, mgm_root)
             points_for_ports = [(px + parent_x, py + parent_y) for px, py in points_for_ports]
             if points_raw_offset_flags and len(points_raw_offset_flags) == len(points_raw):
                 points_raw = [
-                    (px + parent_x, py + parent_y) if not is_offset else (px, py)
-                    for (px, py), is_offset in zip(points_raw, points_raw_offset_flags)
+                    (px + parent_x, py + parent_y) if not is_off else (px, py)
+                    for (px, py), is_off in zip(points_raw, points_raw_offset_flags)
                 ]
             else:
                 points_raw = [(px + parent_x, py + parent_y) for px, py in points_raw]
@@ -1208,6 +1029,310 @@ class DrawIOLoader:
                 source_point = (source_point[0] + parent_x, source_point[1] + parent_y)
             if target_point:
                 target_point = (target_point[0] + parent_x, target_point[1] + parent_y)
+        return (points_raw, source_point, target_point, points_for_ports)
+
+    def _infer_port_side(self, rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
+        """
+        Infer which side a port points to (left/right/top/bottom).
+        Returns None when ambiguous (e.g. center).
+        """
+        if rel_x is None or rel_y is None:
+            return None
+        dx = abs(rel_x - 0.5)
+        dy = abs(rel_y - 0.5)
+        if dx < 1e-9 and dy < 1e-9:
+            return None
+        if dx >= dy:
+            return "right" if rel_x >= 0.5 else "left"
+        return "bottom" if rel_y >= 0.5 else "top"
+
+    def _snap_to_grid(self, val: float, grid_size: Optional[float]) -> float:
+        """Snap a coordinate to draw.io grid."""
+        if not grid_size:
+            return val
+        try:
+            if grid_size <= 0:
+                return val
+            return round(val / grid_size) * grid_size
+        except Exception:
+            return val
+
+    def _clamp01(self, val: Optional[float]) -> Optional[float]:
+        """Clamp value to [0, 1] or return None."""
+        if val is None:
+            return None
+        return max(0.0, min(1.0, val))
+
+    def _dir_for_port_side(self, side: Optional[str]) -> Optional[str]:
+        """Map port side to segment direction: left/right -> 'h', top/bottom -> 'v'."""
+        if side in ("left", "right"):
+            return "h"
+        if side in ("top", "bottom"):
+            return "v"
+        return None
+
+    def _ensure_orthogonal_route_respects_ports(
+        self,
+        pts: List[tuple],
+        exit_x: Optional[float],
+        exit_y: Optional[float],
+        entry_x: Optional[float],
+        entry_y: Optional[float],
+        grid_size: Optional[float],
+    ) -> List[tuple]:
+        """
+        Ensure an orthogonal connector polyline respects the exit/entry side direction.
+        When both ends require the same orientation, generate 2 bends (H-V-H or V-H-V).
+        """
+        if not pts or len(pts) != 2:
+            return pts
+        (sx, sy), (tx, ty) = pts
+        if sx == tx or sy == ty:
+            return pts
+        exit_side = self._infer_port_side(exit_x, exit_y)
+        entry_side = self._infer_port_side(entry_x, entry_y)
+        start_dir = self._dir_for_port_side(exit_side)
+        end_dir = self._dir_for_port_side(entry_side)
+        if start_dir is None or end_dir is None:
+            dx_ = abs(tx - sx)
+            dy_ = abs(ty - sy)
+            if dx_ >= dy_:
+                return [(sx, sy), (tx, sy), (tx, ty)]
+            return [(sx, sy), (sx, ty), (tx, ty)]
+        if start_dir == "h" and end_dir == "v":
+            return [(sx, sy), (tx, sy), (tx, ty)]
+        if start_dir == "v" and end_dir == "h":
+            return [(sx, sy), (sx, ty), (tx, ty)]
+        if start_dir == "h" and end_dir == "h":
+            x_mid = self._snap_to_grid((sx + tx) / 2.0, grid_size)
+            if x_mid == sx:
+                x_mid = self._snap_to_grid(sx + (grid_size or 10.0), grid_size)
+            if x_mid == tx:
+                x_mid = self._snap_to_grid(tx - (grid_size or 10.0), grid_size)
+            return [(sx, sy), (x_mid, sy), (x_mid, ty), (tx, ty)]
+        if start_dir == "v" and end_dir == "v":
+            y_mid = self._snap_to_grid((sy + ty) / 2.0, grid_size)
+            if y_mid == sy:
+                y_mid = self._snap_to_grid(sy + (grid_size or 10.0), grid_size)
+            if y_mid == ty:
+                y_mid = self._snap_to_grid(ty - (grid_size or 10.0), grid_size)
+            return [(sx, sy), (sx, y_mid), (tx, y_mid), (tx, ty)]
+        return pts
+
+    def _build_default_orthogonal_points(
+        self,
+        source_shape: ShapeElement,
+        target_shape: ShapeElement,
+        exit_dx: float,
+        exit_dy: float,
+        entry_dx: float,
+        entry_dy: float,
+    ) -> List[tuple]:
+        """
+        Build a default orthogonal polyline when draw.io doesn't store waypoints.
+        Evaluates HV and VH 1-bend patterns and picks the one that matches dominant axis.
+        """
+        sx_c = source_shape.x + source_shape.w / 2.0
+        sy_c = source_shape.y + source_shape.h / 2.0
+        tx_c = target_shape.x + target_shape.w / 2.0
+        ty_c = target_shape.y + target_shape.h / 2.0
+        dx_c = tx_c - sx_c
+        dy_c = ty_c - sy_c
+        eps_center = 1e-6
+        if abs(dy_c) <= eps_center:
+            exit_x = 1.0 if dx_c >= 0 else 0.0
+            exit_y = 0.5
+            entry_x = 0.0 if dx_c >= 0 else 1.0
+            entry_y = 0.5
+            p1 = self._calculate_boundary_point(source_shape, exit_x, exit_y, exit_dx, exit_dy)
+            p2 = self._calculate_boundary_point(target_shape, entry_x, entry_y, entry_dx, entry_dy)
+            return [p1, p2]
+        if abs(dx_c) <= eps_center:
+            exit_x = 0.5
+            exit_y = 1.0 if dy_c >= 0 else 0.0
+            entry_x = 0.5
+            entry_y = 0.0 if dy_c >= 0 else 1.0
+            p1 = self._calculate_boundary_point(source_shape, exit_x, exit_y, exit_dx, exit_dy)
+            p2 = self._calculate_boundary_point(target_shape, entry_x, entry_y, entry_dx, entry_dy)
+            return [p1, p2]
+        exit_a_x = 1.0 if tx_c >= sx_c else 0.0
+        exit_a_y = 0.5
+        entry_a_x = 0.5
+        entry_a_y = 1.0 if sy_c >= ty_c else 0.0
+        p1a = self._calculate_boundary_point(source_shape, exit_a_x, exit_a_y, exit_dx, exit_dy)
+        p2a = self._calculate_boundary_point(target_shape, entry_a_x, entry_a_y, entry_dx, entry_dy)
+        if p1a[0] == p2a[0] or p1a[1] == p2a[1]:
+            points_a = [p1a, p2a]
+            len_a = abs(p2a[0] - p1a[0]) + abs(p2a[1] - p1a[1])
+        else:
+            mid_a = (p2a[0], p1a[1])
+            points_a = [p1a, mid_a, p2a]
+            len_a = abs(mid_a[0] - p1a[0]) + abs(mid_a[1] - p1a[1]) + abs(p2a[0] - mid_a[0]) + abs(p2a[1] - mid_a[1])
+        exit_b_x = 0.5
+        exit_b_y = 1.0 if ty_c >= sy_c else 0.0
+        entry_b_x = 1.0 if sx_c >= tx_c else 0.0
+        entry_b_y = 0.5
+        p1b = self._calculate_boundary_point(source_shape, exit_b_x, exit_b_y, exit_dx, exit_dy)
+        p2b = self._calculate_boundary_point(target_shape, entry_b_x, entry_b_y, entry_dx, entry_dy)
+        if p1b[0] == p2b[0] or p1b[1] == p2b[1]:
+            points_b = [p1b, p2b]
+            len_b = abs(p2b[0] - p1b[0]) + abs(p2b[1] - p1b[1])
+        else:
+            mid_b = (p1b[0], p2b[1])
+            points_b = [p1b, mid_b, p2b]
+            len_b = abs(mid_b[0] - p1b[0]) + abs(mid_b[1] - p1b[1]) + abs(p2b[0] - mid_b[0]) + abs(p2b[1] - mid_b[1])
+        if abs(dx_c) > abs(dy_c):
+            return points_a
+        if abs(dy_c) > abs(dx_c):
+            return points_b
+        return points_a if len_a <= len_b else points_b
+
+    def _resolve_connector_points(
+        self,
+        source_shape: ShapeElement,
+        target_shape: ShapeElement,
+        points_raw: List[tuple],
+        points_for_ports: List[tuple],
+        source_point: Optional[tuple],
+        target_point: Optional[tuple],
+        style_str: str,
+        edge_style: str,
+        is_elbow_edge: bool,
+        grid_size: Optional[float],
+    ) -> List[tuple]:
+        """
+        Resolve connector geometry: hints, ports, boundary points, waypoints, and optional orthogonal adjustment.
+        Returns the final list of (x, y) points for the connector.
+        """
+        exit_x_val = self.style_extractor.extract_style_float(style_str, "exitX")
+        exit_y_val = self.style_extractor.extract_style_float(style_str, "exitY")
+        entry_x_val = self.style_extractor.extract_style_float(style_str, "entryX")
+        entry_y_val = self.style_extractor.extract_style_float(style_str, "entryY")
+        exit_dx = self.style_extractor.extract_style_float(style_str, "exitDx", 0.0)
+        exit_dy = self.style_extractor.extract_style_float(style_str, "exitDy", 0.0)
+        entry_dx = self.style_extractor.extract_style_float(style_str, "entryDx", 0.0)
+        entry_dy = self.style_extractor.extract_style_float(style_str, "entryDy", 0.0)
+
+        hint_exit_x: Optional[float] = None
+        hint_exit_y: Optional[float] = None
+        hint_entry_x: Optional[float] = None
+        hint_entry_y: Optional[float] = None
+        if edge_style == "orthogonal" and not points_raw and source_point and target_point:
+            sxp, syp = source_point
+            txp, typ = target_point
+            align_tol = 1.0
+            dx_hint = abs(sxp - txp)
+            dy_hint = abs(syp - typ)
+            if not (dx_hint <= align_tol and dy_hint <= align_tol):
+                if dy_hint <= align_tol:
+                    y_hint = (syp + typ) / 2.0
+                    rel_exit_y = self._clamp01((y_hint - source_shape.y) / source_shape.h if source_shape.h else 0.5)
+                    rel_entry_y = self._clamp01((y_hint - target_shape.y) / target_shape.h if target_shape.h else 0.5)
+                    if (target_shape.x + target_shape.w / 2.0) >= (source_shape.x + source_shape.w / 2.0):
+                        hint_exit_x, hint_entry_x = 1.0, 0.0
+                    else:
+                        hint_exit_x, hint_entry_x = 0.0, 1.0
+                    hint_exit_y, hint_entry_y = rel_exit_y, rel_entry_y
+                elif dx_hint <= align_tol:
+                    x_hint = (sxp + txp) / 2.0
+                    rel_exit_x = self._clamp01((x_hint - source_shape.x) / source_shape.w if source_shape.w else 0.5)
+                    rel_entry_x = self._clamp01((x_hint - target_shape.x) / target_shape.w if target_shape.w else 0.5)
+                    if (target_shape.y + target_shape.h / 2.0) >= (source_shape.y + source_shape.h / 2.0):
+                        hint_exit_y, hint_entry_y = 1.0, 0.0
+                    else:
+                        hint_exit_y, hint_entry_y = 0.0, 1.0
+                    hint_exit_x, hint_entry_x = rel_exit_x, rel_entry_x
+
+        exit_x: Optional[float] = None
+        exit_y: Optional[float] = None
+        entry_x: Optional[float] = None
+        entry_y: Optional[float] = None
+
+        if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None and not is_elbow_edge:
+            points = self._build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
+        else:
+            auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
+                source_shape, target_shape, points_for_ports
+            )
+            if exit_x_val is None and hint_exit_x is not None:
+                exit_x_val = hint_exit_x
+            if exit_y_val is None and hint_exit_y is not None:
+                exit_y_val = hint_exit_y
+            if entry_x_val is None and hint_entry_x is not None:
+                entry_x_val = hint_entry_x
+            if entry_y_val is None and hint_entry_y is not None:
+                entry_y_val = hint_entry_y
+            exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
+            exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
+            entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
+            entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
+
+            if edge_style == "orthogonal" and points_for_ports:
+                declared_exit = self._infer_port_side(exit_x, exit_y)
+                implied_exit = self._infer_port_side(auto_exit_x, auto_exit_y)
+                if implied_exit and declared_exit != implied_exit:
+                    exit_x, exit_y = auto_exit_x, auto_exit_y
+                declared_entry = self._infer_port_side(entry_x, entry_y)
+                implied_entry = self._infer_port_side(auto_entry_x, auto_entry_y)
+                if implied_entry and declared_entry != implied_entry:
+                    entry_x, entry_y = auto_entry_x, auto_entry_y
+
+            if edge_style == "orthogonal" and points_for_ports:
+                first_pt = points_for_ports[0]
+                last_pt = points_for_ports[-1]
+                exit_side = self._infer_port_side(exit_x, exit_y)
+                entry_side = self._infer_port_side(entry_x, entry_y)
+                if exit_side and source_shape.w and source_shape.h:
+                    if exit_side == "bottom":
+                        exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 1.0
+                    elif exit_side == "top":
+                        exit_x, exit_y = self._clamp01((first_pt[0] - source_shape.x) / source_shape.w), 0.0
+                    elif exit_side == "right":
+                        exit_x, exit_y = 1.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                    else:
+                        exit_x, exit_y = 0.0, self._clamp01((first_pt[1] - source_shape.y) / source_shape.h)
+                if entry_side and target_shape.w and target_shape.h:
+                    if entry_side == "bottom":
+                        entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 1.0
+                    elif entry_side == "top":
+                        entry_x, entry_y = self._clamp01((last_pt[0] - target_shape.x) / target_shape.w), 0.0
+                    elif entry_side == "right":
+                        entry_x, entry_y = 1.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+                    else:
+                        entry_x, entry_y = 0.0, self._clamp01((last_pt[1] - target_shape.y) / target_shape.h)
+
+            source_x, source_y = self._calculate_boundary_point(source_shape, exit_x, exit_y, exit_dx, exit_dy)
+            target_x, target_y = self._calculate_boundary_point(target_shape, entry_x, entry_y, entry_dx, entry_dy)
+            filtered = [p for p in points_raw if p != (0.0, 0.0)]
+            if not filtered:
+                points = [(source_x, source_y), (target_x, target_y)]
+            else:
+                points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
+
+        if edge_style == "orthogonal" and len(points) == 2:
+            try:
+                points = self._ensure_orthogonal_route_respects_ports(
+                    points, exit_x, exit_y, entry_x, entry_y, grid_size,
+                )
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to ensure orthogonal route respects ports: {e}")
+        return points
+
+    def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> tuple[Optional[ConnectorElement], List[TextElement]]:
+        """Extract connector and its labels (if present)"""
+        source_id = cell.attrib.get("source")
+        target_id = cell.attrib.get("target")
+        source_shape = shapes_dict.get(source_id) if source_id else None
+        target_shape = shapes_dict.get(target_id) if target_id else None
+        connector_id = cell.attrib.get("id")
+        style_str = cell.attrib.get("style", "") or ""
+
+        font_color = self.style_extractor.extract_font_color(cell)
+        label_bg_color = self.style_extractor.extract_label_background_color(cell)
+        edge_style, is_elbow_edge = self._parse_connector_edge_style(style_str)
+        style = self._build_connector_style(cell, mgm_root, style_str)
+        points_raw, source_point, target_point, points_for_ports = self._parse_connector_geometry(cell, mgm_root)
 
         # Floating edges (no source/target shapes) are stored with sourcePoint/targetPoint.
         # Preserve their geometry and arrow styles even without bound shapes.
@@ -1222,19 +1347,6 @@ class DrawIOLoader:
                 points = list(points_raw)
             else:
                 return None, []
-
-            style = Style(
-                stroke=stroke_color,
-                stroke_width=stroke_width,
-                dash=dash_pattern,
-                arrow_start=start_arrow,
-                arrow_end=end_arrow,
-                arrow_start_fill=start_fill,
-                arrow_end_fill=end_fill,
-                arrow_start_size_px=start_size,
-                arrow_end_size_px=end_size,
-                has_shadow=has_shadow
-            )
 
             connector = ConnectorElement(
                 id=connector_id,
@@ -1277,206 +1389,6 @@ class DrawIOLoader:
 
             return connector, labels
 
-        def _infer_port_side(rel_x: Optional[float], rel_y: Optional[float]) -> Optional[str]:
-            """
-            Infer which side a port points to.
-
-            This is used to decide whether exitX/exitY (or entryX/entryY) contradict
-            the orthogonal route implied by waypoints.
-
-            Returns: 'left' | 'right' | 'top' | 'bottom' | None (ambiguous)
-            """
-            if rel_x is None or rel_y is None:
-                return None
-            dx = abs(rel_x - 0.5)
-            dy = abs(rel_y - 0.5)
-            if dx < 1e-9 and dy < 1e-9:
-                return None
-            if dx >= dy:
-                return "right" if rel_x >= 0.5 else "left"
-            return "bottom" if rel_y >= 0.5 else "top"
-
-        def _snap_to_grid(val: float, grid_size: Optional[float]) -> float:
-            """Snap a coordinate to draw.io grid."""
-            if not grid_size:
-                return val
-            try:
-                if grid_size <= 0:
-                    return val
-                return round(val / grid_size) * grid_size
-            except Exception:
-                return val
-
-        def _ensure_orthogonal_route_respects_ports(
-            pts: List[tuple],
-            exit_x_: Optional[float],
-            exit_y_: Optional[float],
-            entry_x_: Optional[float],
-            entry_y_: Optional[float],
-            grid_size_: Optional[float],
-        ) -> List[tuple]:
-            """
-            Ensure an orthogonal connector polyline respects the exit/entry side direction.
-
-            When draw.io stores no waypoints for an orthogonal edge, we still must honor port sides:
-            - If entry is on left/right, the segment adjacent to the target must be horizontal.
-            - If entry is on top/bottom, the segment adjacent to the target must be vertical.
-
-            A single-bend L-shape cannot satisfy both ends when both ends require the same orientation
-            (e.g., exit=right and entry=left => both horizontal). In that case, generate 2 bends:
-            - H-V-H or V-H-V with a snapped midpoint.
-            """
-            if not pts or len(pts) != 2:
-                return pts
-            (sx, sy), (tx, ty) = pts
-            if sx == tx or sy == ty:
-                return pts
-
-            exit_side = _infer_port_side(exit_x_, exit_y_)
-            entry_side = _infer_port_side(entry_x_, entry_y_)
-
-            def _dir_for_side(side: Optional[str]) -> Optional[str]:
-                if side in ("left", "right"):
-                    return "h"
-                if side in ("top", "bottom"):
-                    return "v"
-                return None
-
-            start_dir = _dir_for_side(exit_side)
-            end_dir = _dir_for_side(entry_side)
-
-            # Fallback to legacy heuristic when ambiguous.
-            if start_dir is None or end_dir is None:
-                dx_ = abs(tx - sx)
-                dy_ = abs(ty - sy)
-                if dx_ >= dy_:
-                    return [(sx, sy), (tx, sy), (tx, ty)]
-                return [(sx, sy), (sx, ty), (tx, ty)]
-
-            # Different orientations can be satisfied with a single bend (2 segments).
-            if start_dir == "h" and end_dir == "v":
-                return [(sx, sy), (tx, sy), (tx, ty)]
-            if start_dir == "v" and end_dir == "h":
-                return [(sx, sy), (sx, ty), (tx, ty)]
-
-            # Same orientation at both ends requires 2 bends (3 segments).
-            if start_dir == "h" and end_dir == "h":
-                x_mid = _snap_to_grid((sx + tx) / 2.0, grid_size_)
-                # Avoid zero-length segments after snapping.
-                if x_mid == sx:
-                    x_mid = _snap_to_grid(sx + (grid_size_ or 10.0), grid_size_)
-                if x_mid == tx:
-                    x_mid = _snap_to_grid(tx - (grid_size_ or 10.0), grid_size_)
-                return [(sx, sy), (x_mid, sy), (x_mid, ty), (tx, ty)]
-
-            if start_dir == "v" and end_dir == "v":
-                y_mid = _snap_to_grid((sy + ty) / 2.0, grid_size_)
-                if y_mid == sy:
-                    y_mid = _snap_to_grid(sy + (grid_size_ or 10.0), grid_size_)
-                if y_mid == ty:
-                    y_mid = _snap_to_grid(ty - (grid_size_ or 10.0), grid_size_)
-                return [(sx, sy), (sx, y_mid), (tx, y_mid), (tx, ty)]
-
-            return pts
-
-        def _build_default_orthogonal_points(
-            source_shape_: ShapeElement,
-            target_shape_: ShapeElement,
-            exit_dx_: float,
-            exit_dy_: float,
-            entry_dx_: float,
-            entry_dy_: float,
-        ) -> List[tuple]:
-            """
-            Build a reasonable default orthogonal polyline when draw.io doesn't store waypoints.
-
-            We evaluate two 1-bend patterns:
-              - HV: horizontal then vertical (mid = (target_x, source_y))
-              - VH: vertical then horizontal (mid = (source_x, target_y))
-
-            The chosen pattern also determines which sides to use at each end so the
-            segment adjacent to the target can go vertically when needed (e.g. "downward from ellipse").
-            """
-            sx_c = source_shape_.x + source_shape_.w / 2.0
-            sy_c = source_shape_.y + source_shape_.h / 2.0
-            tx_c = target_shape_.x + target_shape_.w / 2.0
-            ty_c = target_shape_.y + target_shape_.h / 2.0
-
-            # If centers are aligned horizontally/vertically, use straight ports.
-            # This avoids ambiguous HV/VH tie-breaking that can land on the wrong side.
-            dx_c = tx_c - sx_c
-            dy_c = ty_c - sy_c
-            eps_center = 1e-6
-            if abs(dy_c) <= eps_center:
-                # Horizontal alignment: exit right/left, entry left/right.
-                exit_x = 1.0 if dx_c >= 0 else 0.0
-                exit_y = 0.5
-                entry_x = 0.0 if dx_c >= 0 else 1.0
-                entry_y = 0.5
-                p1 = self._calculate_boundary_point(source_shape_, exit_x, exit_y, exit_dx_, exit_dy_)
-                p2 = self._calculate_boundary_point(target_shape_, entry_x, entry_y, entry_dx_, entry_dy_)
-                return [p1, p2]
-
-            if abs(dx_c) <= eps_center:
-                # Vertical alignment: exit bottom/top, entry top/bottom.
-                exit_x = 0.5
-                exit_y = 1.0 if dy_c >= 0 else 0.0
-                entry_x = 0.5
-                entry_y = 0.0 if dy_c >= 0 else 1.0
-                p1 = self._calculate_boundary_point(source_shape_, exit_x, exit_y, exit_dx_, exit_dy_)
-                p2 = self._calculate_boundary_point(target_shape_, entry_x, entry_y, entry_dx_, entry_dy_)
-                return [p1, p2]
-
-            # Candidate A: HV (exit left/right, entry top/bottom)
-            exit_a_x = 1.0 if tx_c >= sx_c else 0.0
-            exit_a_y = 0.5
-            entry_a_x = 0.5
-            entry_a_y = 1.0 if sy_c >= ty_c else 0.0  # comes from below -> bottom, from above -> top
-
-            p1a = self._calculate_boundary_point(source_shape_, exit_a_x, exit_a_y, exit_dx_, exit_dy_)
-            p2a = self._calculate_boundary_point(target_shape_, entry_a_x, entry_a_y, entry_dx_, entry_dy_)
-            if p1a[0] == p2a[0] or p1a[1] == p2a[1]:
-                points_a = [p1a, p2a]
-                len_a = abs(p2a[0] - p1a[0]) + abs(p2a[1] - p1a[1])
-            else:
-                mid_a = (p2a[0], p1a[1])
-                points_a = [p1a, mid_a, p2a]
-                len_a = abs(mid_a[0] - p1a[0]) + abs(mid_a[1] - p1a[1]) + abs(p2a[0] - mid_a[0]) + abs(p2a[1] - mid_a[1])
-
-            # Candidate B: VH (exit top/bottom, entry left/right)
-            exit_b_x = 0.5
-            exit_b_y = 1.0 if ty_c >= sy_c else 0.0  # towards target
-            entry_b_x = 1.0 if sx_c >= tx_c else 0.0  # comes from right -> right, from left -> left
-            entry_b_y = 0.5
-
-            p1b = self._calculate_boundary_point(source_shape_, exit_b_x, exit_b_y, exit_dx_, exit_dy_)
-            p2b = self._calculate_boundary_point(target_shape_, entry_b_x, entry_b_y, entry_dx_, entry_dy_)
-            if p1b[0] == p2b[0] or p1b[1] == p2b[1]:
-                points_b = [p1b, p2b]
-                len_b = abs(p2b[0] - p1b[0]) + abs(p2b[1] - p1b[1])
-            else:
-                mid_b = (p1b[0], p2b[1])
-                points_b = [p1b, mid_b, p2b]
-                len_b = abs(mid_b[0] - p1b[0]) + abs(mid_b[1] - p1b[1]) + abs(p2b[0] - mid_b[0]) + abs(p2b[1] - mid_b[1])
-
-            # Prefer the route that exits along the dominant axis between centers.
-            # This keeps left/right connections leaving from the side when the target is
-            # mostly horizontal from the source, which matches draw.io's default routing.
-            if abs(dx_c) > abs(dy_c):
-                return points_a
-            if abs(dy_c) > abs(dx_c):
-                return points_b
-            return points_a if len_a <= len_b else points_b
-
-        # Calculate connection points (automatically infer ports if not specified)
-        exit_x_val = self.style_extractor.extract_style_float(style_str, "exitX")
-        exit_y_val = self.style_extractor.extract_style_float(style_str, "exitY")
-        entry_x_val = self.style_extractor.extract_style_float(style_str, "entryX")
-        entry_y_val = self.style_extractor.extract_style_float(style_str, "entryY")
-        exit_dx = self.style_extractor.extract_style_float(style_str, "exitDx", 0.0)
-        exit_dy = self.style_extractor.extract_style_float(style_str, "exitDy", 0.0)
-        entry_dx = self.style_extractor.extract_style_float(style_str, "entryDx", 0.0)
-        entry_dy = self.style_extractor.extract_style_float(style_str, "entryDy", 0.0)
         grid_size = None
         try:
             if mgm_root is not None:
@@ -1484,181 +1396,11 @@ class DrawIOLoader:
         except Exception:
             grid_size = None
 
-        def _clamp01(val: Optional[float]) -> Optional[float]:
-            if val is None:
-                return None
-            return max(0.0, min(1.0, val))
-
-        hint_exit_x = None
-        hint_exit_y = None
-        hint_entry_x = None
-        hint_entry_y = None
-        if edge_style == "orthogonal" and not points_raw and source_point and target_point:
-            sxp, syp = source_point
-            txp, typ = target_point
-            align_tol = 1.0
-            dx_hint = abs(sxp - txp)
-            dy_hint = abs(syp - typ)
-            if not (dx_hint <= align_tol and dy_hint <= align_tol):
-                if dy_hint <= align_tol:
-                    y_hint = (syp + typ) / 2.0
-                    rel_exit_y = _clamp01((y_hint - source_shape.y) / source_shape.h if source_shape.h else 0.5)
-                    rel_entry_y = _clamp01((y_hint - target_shape.y) / target_shape.h if target_shape.h else 0.5)
-                    if (target_shape.x + target_shape.w / 2.0) >= (source_shape.x + source_shape.w / 2.0):
-                        hint_exit_x, hint_entry_x = 1.0, 0.0
-                    else:
-                        hint_exit_x, hint_entry_x = 0.0, 1.0
-                    hint_exit_y, hint_entry_y = rel_exit_y, rel_entry_y
-                elif dx_hint <= align_tol:
-                    x_hint = (sxp + txp) / 2.0
-                    rel_exit_x = _clamp01((x_hint - source_shape.x) / source_shape.w if source_shape.w else 0.5)
-                    rel_entry_x = _clamp01((x_hint - target_shape.x) / target_shape.w if target_shape.w else 0.5)
-                    if (target_shape.y + target_shape.h / 2.0) >= (source_shape.y + source_shape.h / 2.0):
-                        hint_exit_y, hint_entry_y = 1.0, 0.0
-                    else:
-                        hint_exit_y, hint_entry_y = 0.0, 1.0
-                    hint_exit_x, hint_entry_x = rel_exit_x, rel_entry_x
-
-        # If draw.io doesn't store waypoints and explicit ports are also missing,
-        # build a better default orthogonal polyline by evaluating HV/VH patterns.
-        if edge_style == "orthogonal" and not points_raw and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None and not is_elbow_edge:
-            points = _build_default_orthogonal_points(source_shape, target_shape, exit_dx, exit_dy, entry_dx, entry_dy)
-            source_x, source_y = points[0]
-            target_x, target_y = points[-1]
-        else:
-            if edge_style == "orthogonal":
-                auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
-                    source_shape, target_shape, points_for_ports
-                )
-            else:
-                auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
-                    source_shape, target_shape, points_for_ports
-                )
-
-            if exit_x_val is None and hint_exit_x is not None:
-                exit_x_val = hint_exit_x
-            if exit_y_val is None and hint_exit_y is not None:
-                exit_y_val = hint_exit_y
-            if entry_x_val is None and hint_entry_x is not None:
-                entry_x_val = hint_entry_x
-            if entry_y_val is None and hint_entry_y is not None:
-                entry_y_val = hint_entry_y
-
-            exit_x = exit_x_val if exit_x_val is not None else auto_exit_x
-            exit_y = exit_y_val if exit_y_val is not None else auto_exit_y
-            entry_x = entry_x_val if entry_x_val is not None else auto_entry_x
-            entry_y = entry_y_val if entry_y_val is not None else auto_entry_y
-
-            # For orthogonal edges with waypoints, prefer the side implied by the first/last waypoint
-            # when the declared port contradicts it.
-            if edge_style == "orthogonal" and points_for_ports:
-                declared_exit_side = _infer_port_side(exit_x, exit_y)
-                implied_exit_side = _infer_port_side(auto_exit_x, auto_exit_y)
-                if implied_exit_side and declared_exit_side != implied_exit_side:
-                    exit_x, exit_y = auto_exit_x, auto_exit_y
-
-                declared_entry_side = _infer_port_side(entry_x, entry_y)
-                implied_entry_side = _infer_port_side(auto_entry_x, auto_entry_y)
-                if implied_entry_side and declared_entry_side != implied_entry_side:
-                    entry_x, entry_y = auto_entry_x, auto_entry_y
-
-            # For orthogonal edges with waypoints, project the first/last waypoint onto the
-            # source/target boundary so the connector starts (ends) exactly above/below or
-            # beside the bend, not at the center of the edge. This preserves "straight down
-            # then right" instead of "diagonal from center to waypoint".
-            if edge_style == "orthogonal" and points_for_ports:
-                first_pt = points_for_ports[0]
-                last_pt = points_for_ports[-1]
-                exit_side = _infer_port_side(exit_x, exit_y)
-                entry_side = _infer_port_side(entry_x, entry_y)
-                if exit_side and source_shape.w and source_shape.h:
-                    if exit_side == "bottom":
-                        exit_x = _clamp01((first_pt[0] - source_shape.x) / source_shape.w)
-                        exit_y = 1.0
-                    elif exit_side == "top":
-                        exit_x = _clamp01((first_pt[0] - source_shape.x) / source_shape.w)
-                        exit_y = 0.0
-                    elif exit_side == "right":
-                        exit_x = 1.0
-                        exit_y = _clamp01((first_pt[1] - source_shape.y) / source_shape.h)
-                    elif exit_side == "left":
-                        exit_x = 0.0
-                        exit_y = _clamp01((first_pt[1] - source_shape.y) / source_shape.h)
-                if entry_side and target_shape.w and target_shape.h:
-                    if entry_side == "bottom":
-                        entry_x = _clamp01((last_pt[0] - target_shape.x) / target_shape.w)
-                        entry_y = 1.0
-                    elif entry_side == "top":
-                        entry_x = _clamp01((last_pt[0] - target_shape.x) / target_shape.w)
-                        entry_y = 0.0
-                    elif entry_side == "right":
-                        entry_x = 1.0
-                        entry_y = _clamp01((last_pt[1] - target_shape.y) / target_shape.h)
-                    elif entry_side == "left":
-                        entry_x = 0.0
-                        entry_y = _clamp01((last_pt[1] - target_shape.y) / target_shape.h)
-
-            # Calculate connection points
-            source_x, source_y = self._calculate_boundary_point(
-                source_shape, exit_x, exit_y, exit_dx, exit_dy
-            )
-            target_x, target_y = self._calculate_boundary_point(
-                target_shape, entry_x, entry_y, entry_dx, entry_dy
-            )
-        
-        # Build points
-        if 'points' not in locals():
-            points = []
-            # Filter out (0.0, 0.0) waypoints that come from as="offset" mxPoint elements
-            # These are label offsets, not actual waypoints, but we need to maintain
-            # backward compatibility for endpoint calculation
-            filtered_points_raw = [p for p in points_raw if p != (0.0, 0.0)]
-            
-            if not filtered_points_raw:
-                points = [(source_x, source_y), (target_x, target_y)]
-            else:
-                points = list(filtered_points_raw)
-                # drawio's <Array as="points"> contains only waypoints
-                # Start and end points are not included, so they need to be added before and after
-                # Insert start point at the beginning
-                points.insert(0, (source_x, source_y))
-                # Append end point at the end
-                points.append((target_x, target_y))
-        
-        # For orthogonalEdgeStyle, add one intermediate point to create an L-shape (2 segments)
-        # even if there are no intermediate points
-        if edge_style == "orthogonal" and len(points) == 2:
-            # For connectors without stored waypoints, ensure the route respects the declared/auto ports.
-            # This is crucial when entry/exit are on left/right: the last segment must be horizontal.
-            try:
-                points = _ensure_orthogonal_route_respects_ports(
-                    points,
-                    exit_x if "exit_x" in locals() else None,
-                    exit_y if "exit_y" in locals() else None,
-                    entry_x if "entry_x" in locals() else None,
-                    entry_y if "entry_y" in locals() else None,
-                    grid_size,
-                )
-            except Exception as e:
-                # Keep the original points on any unexpected failure.
-                if self.logger:
-                    self.logger.debug(f"Failed to ensure orthogonal route respects ports: {e}")
-        
-        # Create style
-        style = Style(
-            stroke=stroke_color,
-            stroke_width=stroke_width,
-            dash=dash_pattern,
-            arrow_start=start_arrow,
-            arrow_end=end_arrow,
-            arrow_start_fill=start_fill,
-            arrow_end_fill=end_fill,
-            arrow_start_size_px=start_size,
-            arrow_end_size_px=end_size,
-            has_shadow=has_shadow
+        points = self._resolve_connector_points(
+            source_shape, target_shape, points_raw, points_for_ports,
+            source_point, target_point, style_str, edge_style, is_elbow_edge, grid_size,
         )
-        
-        # Create ConnectorElement
+
         connector = ConnectorElement(
             id=connector_id,
             source_id=source_id,
@@ -1666,7 +1408,7 @@ class DrawIOLoader:
             points=points,
             edge_style=edge_style,
             style=style,
-            z_index=0  # TODO: extract z-index
+            z_index=0,
         )
 
         # Extract label text (edge value)
@@ -1734,6 +1476,29 @@ class DrawIOLoader:
             ),
         )
 
+    def _adjust_label_outside_shape(
+        self,
+        text_x: float,
+        text_y: float,
+        label_w: float,
+        label_h: float,
+        shape: ShapeElement,
+        push_to_right: bool,
+    ) -> tuple[float, float]:
+        """If label overlaps shape, move it outside (right/left of shape, or below). Returns (text_x, text_y)."""
+        label_right = text_x + label_w
+        label_bottom = text_y + label_h
+        shape_right = shape.x + shape.w
+        shape_bottom = shape.y + shape.h
+        gap = 5.0
+        if shape.x <= text_x <= shape_right and shape.y <= text_y <= shape_bottom:
+            text_x = shape_right + gap if push_to_right else shape.x - label_w - gap
+        elif shape.x <= label_right <= shape_right and shape.y <= label_bottom <= shape_bottom:
+            text_x = shape_right + gap if push_to_right else shape.x - label_w - gap
+        elif text_x <= shape.x <= label_right and text_y <= shape.y <= label_bottom:
+            text_y = shape_bottom + gap
+        return (text_x, text_y)
+
     def _extract_edge_label_cell(
         self,
         label_cell: ET.Element,
@@ -1761,23 +1526,8 @@ class DrawIOLoader:
         )
         label_w, label_h = self._estimate_text_box_size(text_paragraphs)
 
-        # Determine alignment for positioning
-        align = self.style_extractor.extract_style_value(label_style_str, "align")
         vertical_align = self.style_extractor.extract_style_value(label_style_str, "verticalAlign")
-        
-        # Get geometry to determine if this is a start/end label
-        geo = label_cell.find(".//mxGeometry")
-        is_start_label = False
-        is_end_label = False
-        if geo is not None and (geo.attrib.get("relative") or "").strip() == "1":
-            try:
-                rel_x = float(geo.attrib.get("x", "0") or 0)
-                if align == "left" and rel_x <= -0.5:
-                    is_start_label = True
-                elif align == "right" and rel_x >= 0.5:
-                    is_end_label = True
-            except ValueError:
-                pass
+        is_start_label, is_end_label = self._parse_edge_label_start_end(label_cell, label_style_str)
 
         # Adjust position based on alignment
         if is_start_label:
@@ -1801,50 +1551,14 @@ class DrawIOLoader:
             # Center vertically
             text_y = label_y - label_h / 2.0
 
-        # Adjust position to ensure label is outside containers
         if is_start_label and source_shape:
-            # Ensure start label is outside source container
-            # Check if label overlaps with source shape
-            label_right = text_x + label_w
-            label_bottom = text_y + label_h
-            source_right = source_shape.x + source_shape.w
-            source_bottom = source_shape.y + source_shape.h
-            
-            # If label is inside source shape, move it outside
-            if (source_shape.x <= text_x <= source_right and 
-                source_shape.y <= text_y <= source_bottom):
-                # Move label to the right of the source shape
-                text_x = source_right + 5.0
-            elif (source_shape.x <= label_right <= source_right and 
-                  source_shape.y <= label_bottom <= source_bottom):
-                # Move label to the right of the source shape
-                text_x = source_right + 5.0
-            elif (text_x <= source_shape.x <= label_right and 
-                  text_y <= source_shape.y <= label_bottom):
-                # Move label below the source shape
-                text_y = source_bottom + 5.0
-                
+            text_x, text_y = self._adjust_label_outside_shape(
+                text_x, text_y, label_w, label_h, source_shape, push_to_right=True
+            )
         elif is_end_label and target_shape:
-            # Ensure end label is outside target container
-            # Check if label overlaps with target shape
-            label_right = text_x + label_w
-            label_bottom = text_y + label_h
-            target_right = target_shape.x + target_shape.w
-            target_bottom = target_shape.y + target_shape.h
-            
-            # If label is inside target shape, move it outside
-            if (target_shape.x <= text_x <= target_right and 
-                target_shape.y <= text_y <= target_bottom):
-                # Move label to the left of the target shape
-                text_x = target_shape.x - label_w - 5.0
-            elif (target_shape.x <= label_right <= target_right and 
-                  target_shape.y <= label_bottom <= target_bottom):
-                # Move label to the left of the target shape
-                text_x = target_shape.x - label_w - 5.0
-            elif (text_x <= target_shape.x <= label_right and 
-                  text_y <= target_shape.y <= label_bottom):
-                # Move label below the target shape
-                text_y = target_bottom + 5.0
+            text_x, text_y = self._adjust_label_outside_shape(
+                text_x, text_y, label_w, label_h, target_shape, push_to_right=False
+            )
 
         return TextElement(
             x=text_x,
@@ -1858,6 +1572,57 @@ class DrawIOLoader:
             ),
         )
 
+    def _polyline_segment_lengths(self, points: List[tuple]) -> tuple[float, List[float]]:
+        """Return (total_length, list of segment lengths) for a polyline."""
+        if not points or len(points) < 2:
+            return (0.0, [])
+        total = 0.0
+        seg_lengths: List[float] = []
+        for i in range(len(points) - 1):
+            dx = points[i + 1][0] - points[i][0]
+            dy = points[i + 1][1] - points[i][1]
+            L = (dx * dx + dy * dy) ** 0.5
+            seg_lengths.append(L)
+            total += L
+        return (total, seg_lengths)
+
+    def _point_along_polyline(
+        self, points: List[tuple], seg_lengths: List[float], total_len: float, t_rel: float
+    ) -> tuple[float, float, float, float]:
+        """Return (base_x, base_y, seg_dx, seg_dy) at position t_rel (0..1) along the polyline."""
+        if not points or len(points) < 2 or total_len <= 1e-6:
+            sx, sy = points[0] if points else (0.0, 0.0)
+            tx, ty = points[-1] if points else (0.0, 0.0)
+            return (sx, sy, tx - sx, ty - sy)
+        t_rel = min(max(t_rel, 0.0), 1.0)
+        target_len = total_len * t_rel
+        acc = 0.0
+        for i in range(len(points) - 1):
+            seg_len = seg_lengths[i]
+            if acc + seg_len >= target_len:
+                t = (target_len - acc) / max(seg_len, 1e-6)
+                base_x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
+                base_y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
+                seg_dx = points[i + 1][0] - points[i][0]
+                seg_dy = points[i + 1][1] - points[i][1]
+                return (base_x, base_y, seg_dx, seg_dy)
+            acc += seg_len
+        base_x, base_y = points[-1][0], points[-1][1]
+        seg_dx = points[-1][0] - points[-2][0]
+        seg_dy = points[-1][1] - points[-2][1]
+        return (base_x, base_y, seg_dx, seg_dy)
+
+    def _segment_normal_for_label(self, seg_dx: float, seg_dy: float, edge_style: str) -> tuple[float, float]:
+        """Return (n_x, n_y) unit normal for label offset (right-hand side of segment direction)."""
+        if edge_style == "orthogonal" and abs(seg_dx) + abs(seg_dy) > 1e-6:
+            if abs(seg_dx) >= abs(seg_dy):
+                return (0.0, -1.0) if seg_dx >= 0 else (0.0, 1.0)
+            return (1.0, 0.0) if seg_dy >= 0 else (-1.0, 0.0)
+        seg_len = (seg_dx * seg_dx + seg_dy * seg_dy) ** 0.5
+        if seg_len <= 1e-6:
+            return (0.0, 1.0)
+        return (-seg_dy / seg_len, seg_dx / seg_len)
+
     def _calculate_connector_label_position(
         self,
         cell: ET.Element,
@@ -1869,34 +1634,8 @@ class DrawIOLoader:
         if not points or len(points) < 2:
             return (0.0, 0.0)
 
-        # Midpoint along the polyline length.
-        def _dist(a: tuple, b: tuple) -> float:
-            dx = b[0] - a[0]
-            dy = b[1] - a[1]
-            return (dx * dx + dy * dy) ** 0.5
-
-        total_len = 0.0
-        seg_lengths: List[float] = []
-        for i in range(len(points) - 1):
-            seg_len = _dist(points[i], points[i + 1])
-            seg_lengths.append(seg_len)
-            total_len += seg_len
-
-        # Determine if this is a start or end label
-        align = self.style_extractor.extract_style_value(style_str, "align") if style_str else None
-        vertical_align = self.style_extractor.extract_style_value(style_str, "verticalAlign") if style_str else None
-        geo = cell.find(".//mxGeometry")
-        is_start_label = False
-        is_end_label = False
-        if geo is not None and (geo.attrib.get("relative") or "").strip() == "1":
-            try:
-                rel_x = float(geo.attrib.get("x", "0") or 0)
-                if align == "left" and rel_x <= -0.5:
-                    is_start_label = True
-                elif align == "right" and rel_x >= 0.5:
-                    is_end_label = True
-            except ValueError:
-                pass
+        total_len, seg_lengths = self._polyline_segment_lengths(points)
+        is_start_label, is_end_label = self._parse_edge_label_start_end(cell, style_str)
 
         if total_len <= 1e-6:
             sx, sy = points[0]
@@ -1909,64 +1648,23 @@ class DrawIOLoader:
                 base_x, base_y = (sx + tx) / 2.0, (sy + ty) / 2.0
             seg_dx, seg_dy = (tx - sx), (ty - sy)
         else:
-            rel_pos, rel_offset, abs_offset = self._extract_edge_label_geometry(cell)
-            # Override rel_pos for start/end labels
+            rel_pos, _, _ = self._extract_edge_label_geometry(cell)
             if is_start_label:
                 rel_pos = 0.0
             elif is_end_label:
                 rel_pos = 1.0
             t_rel = min(max(rel_pos, 0.0), 1.0)
-            target_len = total_len * t_rel
-            acc = 0.0
-            base_x, base_y = points[0]
-            seg_dx, seg_dy = (points[1][0] - points[0][0]), (points[1][1] - points[0][1])
-            for i in range(len(points) - 1):
-                seg_len = seg_lengths[i]
-                if acc + seg_len >= target_len:
-                    t = (target_len - acc) / max(seg_len, 1e-6)
-                    base_x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
-                    base_y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
-                    seg_dx = points[i + 1][0] - points[i][0]
-                    seg_dy = points[i + 1][1] - points[i][1]
-                    break
-                acc += seg_len
+            base_x, base_y, seg_dx, seg_dy = self._point_along_polyline(points, seg_lengths, total_len, t_rel)
 
-        # Apply relative offset (perpendicular to local segment) + absolute offset (screen space)
         rel_pos, rel_offset, abs_offset = self._extract_edge_label_geometry(cell)
         rel_x, rel_y = rel_offset
         abs_x, abs_y = abs_offset
-
-        # Normal direction
-        if edge_style == "orthogonal" and abs(seg_dx) + abs(seg_dy) > 1e-6:
-            # For orthogonal segments, draw.io's label offset is relative to the segment direction.
-            # Use the right-hand normal of the segment so positive rel_y moves to the "right" side.
-            if abs(seg_dx) >= abs(seg_dy):
-                # Horizontal segment: right-hand normal is up when moving right, down when moving left.
-                n_x, n_y = (0.0, -1.0) if seg_dx >= 0 else (0.0, 1.0)
-            else:
-                # Vertical segment: right-hand normal is right when moving down, left when moving up.
-                n_x, n_y = (1.0, 0.0) if seg_dy >= 0 else (-1.0, 0.0)
-        else:
-            seg_len = (seg_dx * seg_dx + seg_dy * seg_dy) ** 0.5
-            if seg_len <= 1e-6:
-                n_x, n_y = 0.0, 1.0
-            else:
-                # Counter-clockwise normal.
-                n_x = -seg_dy / seg_len
-                n_y = seg_dx / seg_len
-
-        # For verticalAlign=bottom, the label should be above the line
-        # In draw.io, positive rel_y means upward, so we keep the normal direction
-        offset_multiplier = 1.0
-
-        pos_x = base_x + n_x * rel_y * offset_multiplier + abs_x
-        pos_y = base_y + n_y * rel_y * offset_multiplier + abs_y
-
-        # If geometry has non-relative x/y, treat them as absolute offsets in screen space.
+        n_x, n_y = self._segment_normal_for_label(seg_dx, seg_dy, edge_style)
+        pos_x = base_x + n_x * rel_y + abs_x
+        pos_y = base_y + n_y * rel_y + abs_y
         if not self._edge_label_is_relative(cell):
             pos_x += rel_x
             pos_y += rel_y
-
         return (pos_x, pos_y)
 
     def _edge_label_is_relative(self, cell: ET.Element) -> bool:
@@ -1974,6 +1672,23 @@ class DrawIOLoader:
         if geo is None:
             return False
         return (geo.attrib.get("relative") or "").strip() == "1"
+
+    def _parse_edge_label_start_end(self, cell: ET.Element, style_str: str) -> tuple[bool, bool]:
+        """Determine if edge label is start/end from geometry and align. Returns (is_start_label, is_end_label)."""
+        is_start_label = False
+        is_end_label = False
+        geo = cell.find(".//mxGeometry")
+        if geo is not None and (geo.attrib.get("relative") or "").strip() == "1":
+            try:
+                rel_x = float(geo.attrib.get("x", "0") or 0)
+                align = self.style_extractor.extract_style_value(style_str, "align") if style_str else None
+                if align == "left" and rel_x <= -0.5:
+                    is_start_label = True
+                elif align == "right" and rel_x >= 0.5:
+                    is_end_label = True
+            except ValueError:
+                pass
+        return (is_start_label, is_end_label)
 
     def _extract_edge_label_geometry(self, cell: ET.Element) -> tuple:
         """Extract edge label geometry (relative position, relative offset, absolute offset)."""
@@ -2054,178 +1769,126 @@ class DrawIOLoader:
         width = max(max_len * avg_char_px + padding, float(font_size) * 1.5)
         height = max(len(lines) * float(font_size) * 1.4, float(font_size) * 1.2)
         return (width, height)
-    
+
+    def _boundary_point_parallelogram(
+        self, shape: ShapeElement, rel_x: float, rel_y: float, base_x: float, base_y: float
+    ) -> tuple[float, float]:
+        """Connection point on parallelogram (or data shape) boundary; no exitDx/exitDy applied."""
+        skew = max(0.0, min(float(PARALLELOGRAM_SKEW), 0.49))
+        x0, y0, w, h = shape.x, shape.y, shape.w, shape.h
+        offset = max(0.0, min(skew * h, w * 0.49))
+        tl = (x0 + offset, y0)
+        tr = (x0 + w, y0)
+        br = (x0 + w - offset, y0 + h)
+        bl = (x0, y0 + h)
+
+        def _lerp(a: tuple, b: tuple, t: float) -> tuple:
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+        def _closest_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> tuple:
+            abx, aby = bx - ax, by - ay
+            apx, apy = px - ax, py - ay
+            denom = abx * abx + aby * aby
+            if denom <= 1e-12:
+                return (ax, ay)
+            t = (apx * abx + apy * aby) / denom
+            t = max(0.0, min(1.0, t))
+            return (ax + t * abx, ay + t * aby)
+
+        eps = 1e-9
+        if rel_x <= 0.0 + eps:
+            return _lerp(tl, bl, rel_y)
+        if rel_x >= 1.0 - eps:
+            return _lerp(tr, br, rel_y)
+        if rel_y <= 0.0 + eps:
+            return _lerp(tl, tr, rel_x)
+        if rel_y >= 1.0 - eps:
+            return _lerp(bl, br, rel_x)
+        poly = [tl, tr, br, bl]
+        best_x, best_y = poly[0]
+        best_d2 = float("inf")
+        for i in range(len(poly)):
+            ax, ay = poly[i]
+            bx, by = poly[(i + 1) % len(poly)]
+            cx, cy = _closest_on_segment(base_x, base_y, ax, ay, bx, by)
+            d2 = (base_x - cx) ** 2 + (base_y - cy) ** 2
+            if d2 < best_d2:
+                best_d2, best_x, best_y = d2, cx, cy
+        return (best_x, best_y)
+
+    def _boundary_point_rhombus(
+        self, shape: ShapeElement, base_x: float, base_y: float
+    ) -> tuple[float, float]:
+        """Connection point on rhombus boundary (scale from center to edge)."""
+        cx = shape.x + shape.w / 2
+        cy = shape.y + shape.h / 2
+        dx, dy = base_x - cx, base_y - cy
+        if shape.w <= 0:
+            return (base_x, base_y)
+        denom = (abs(dx) / (shape.w / 2)) + (abs(dy) / (shape.h / 2))
+        if denom > 0:
+            t = 1.0 / denom
+            return (cx + t * dx, cy + t * dy)
+        return (base_x, base_y)
+
+    def _boundary_point_ellipse(
+        self, shape: ShapeElement, base_x: float, base_y: float
+    ) -> tuple[float, float]:
+        """Connection point on ellipse/circle boundary (scale from center to edge)."""
+        cx = shape.x + shape.w / 2
+        cy = shape.y + shape.h / 2
+        dx, dy = base_x - cx, base_y - cy
+        if shape.w <= 0 or shape.h <= 0:
+            return (base_x, base_y)
+        denom_sq = (dx / (shape.w / 2)) ** 2 + (dy / (shape.h / 2)) ** 2
+        if denom_sq > 0:
+            t = 1.0 / (denom_sq ** 0.5)
+            return (cx + t * dx, cy + t * dy)
+        return (base_x, base_y)
+
+    def _boundary_point_rect(
+        self, shape: ShapeElement, rel_x: float, rel_y: float, base_x: float, base_y: float
+    ) -> tuple[float, float]:
+        """Connection point on rectangle boundary (nearest edge for interior rel_x/rel_y)."""
+        if rel_x <= 0.0:
+            return (shape.x, base_y)
+        if rel_x >= 1.0:
+            return (shape.x + shape.w, base_y)
+        if rel_y <= 0.0:
+            return (base_x, shape.y)
+        if rel_y >= 1.0:
+            return (base_x, shape.y + shape.h)
+        dist_left = abs(base_x - shape.x)
+        dist_right = abs(base_x - (shape.x + shape.w))
+        dist_top = abs(base_y - shape.y)
+        dist_bottom = abs(base_y - (shape.y + shape.h))
+        min_dist = min(dist_left, dist_right, dist_top, dist_bottom)
+        if min_dist == dist_left:
+            return (shape.x, base_y)
+        if min_dist == dist_right:
+            return (shape.x + shape.w, base_y)
+        if min_dist == dist_top:
+            return (base_x, shape.y)
+        return (base_x, shape.y + shape.h)
+
     def _calculate_boundary_point(self, shape: ShapeElement, rel_x: float, rel_y: float, offset_x: float, offset_y: float) -> tuple:
         """
-        Calculate connection point on shape boundary
-        
-        rel_x, rel_y: Relative coordinates (0.0-1.0)
-        - 0.0 = left/top edge
-        - 0.5 = center
-        - 1.0 = right/bottom edge
-        
-        Returns: (x, y) tuple (absolute coordinates)
+        Calculate connection point on shape boundary.
+        rel_x, rel_y: 0.0 = left/top, 0.5 = center, 1.0 = right/bottom.
+        Returns (x, y) absolute coordinates including exitDx/exitDy.
         """
-        # Correction based on shape type
-        shape_type = shape.shape_type.lower() if shape.shape_type else ""
-
-        # Base point from rel_x/rel_y (offset is applied only once at the end)
+        shape_type = (shape.shape_type or "").lower()
         base_x = shape.x + shape.w * rel_x
         base_y = shape.y + shape.h * rel_y
-
-        # Apply correction for special shapes
-        # Parallelogram and flowchart Data (input/output) both have slanted left/right edges.
-        # Use the same edge interpolation so connectors attach on the actual slant, not the bounding box.
         if "parallelogram" in shape_type or "data" in shape_type:
-            # For parallelograms (and Data), rel_x/rel_y often refers to "position on edge" (e.g., exitX=1, exitY=0.5 is the midpoint of the right edge).
-            # If processed with nearest neighbor projection, it may deviate from the midpoint (especially on left/right edges), resulting in appearing "inside the edge".
-            # Therefore, for boundary specifications (rel_x/rel_y near 0/1), use linear interpolation on the corresponding edge to ensure it is always on the edge.
-            #
-            # Furthermore, PPTX's parallelogram tends to have adjust values that affect "horizontal offset amount based on height",
-            # and if estimated based on width, the diagonal edge becomes too slanted and connection points tend to go inside. Here, we calculate the offset based on height.
-            skew = float(PARALLELOGRAM_SKEW)
-            skew = max(0.0, min(skew, 0.49))
-
-            x0, y0, w, h = shape.x, shape.y, shape.w, shape.h
-            # Horizontal offset amount (px)
-            offset = skew * h
-            # Suppress if offset is too large (would cause edge reversal) (less than half of w)
-            offset = max(0.0, min(offset, w * 0.49))
-
-            # Default parallelogram tilted to the right (equivalent to PPT's parallelogram)
-            tl = (x0 + offset, y0)       # top-left
-            tr = (x0 + w, y0)            # top-right
-            br = (x0 + w - offset, y0 + h)  # bottom-right
-            bl = (x0, y0 + h)            # bottom-left
-
-            def _lerp(a: tuple, b: tuple, t: float) -> tuple:
-                return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-
-            def _closest_point_on_segment(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> tuple:
-                abx = bx - ax
-                aby = by - ay
-                apx = px - ax
-                apy = py - ay
-                denom = abx * abx + aby * aby
-                if denom <= 1e-12:
-                    return ax, ay
-                t = (apx * abx + apy * aby) / denom
-                t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
-                return ax + t * abx, ay + t * aby
-
-            eps = 1e-9
-            if rel_x <= 0.0 + eps:
-                # Left edge (top-left -> bottom-left)
-                x, y = _lerp(tl, bl, rel_y)
-            elif rel_x >= 1.0 - eps:
-                # Right edge (top-right -> bottom-right)
-                x, y = _lerp(tr, br, rel_y)
-            elif rel_y <= 0.0 + eps:
-                # Top edge (top-left -> top-right)
-                x, y = _lerp(tl, tr, rel_x)
-            elif rel_y >= 1.0 - eps:
-                # Bottom edge (bottom-left -> bottom-right)
-                x, y = _lerp(bl, br, rel_x)
-            else:
-                # For internal specification, project to nearest edge
-                poly = [tl, tr, br, bl]
-                best_x, best_y = poly[0]
-                best_d2 = float("inf")
-                for i in range(len(poly)):
-                    ax, ay = poly[i]
-                    bx, by = poly[(i + 1) % len(poly)]
-                    cx, cy = _closest_point_on_segment(base_x, base_y, ax, ay, bx, by)
-                    dx = base_x - cx
-                    dy = base_y - cy
-                    d2 = dx * dx + dy * dy
-                    if d2 < best_d2:
-                        best_d2 = d2
-                        best_x, best_y = cx, cy
-                x, y = best_x, best_y
-
+            x, y = self._boundary_point_parallelogram(shape, rel_x, rel_y, base_x, base_y)
         elif "rhombus" in shape_type:
-            # Correction for rhombus
-            cx = shape.x + shape.w / 2
-            cy = shape.y + shape.h / 2
-            dx = base_x - cx
-            dy = base_y - cy
-            
-            if shape.w > 0:
-                denom = (abs(dx) / (shape.w / 2)) + (abs(dy) / (shape.h / 2))
-                if denom > 0:
-                    t = 1.0 / denom
-                    x = cx + t * dx
-                    y = cy + t * dy
-                else:
-                    x = base_x
-                    y = base_y
-            else:
-                x = base_x
-                y = base_y
+            x, y = self._boundary_point_rhombus(shape, base_x, base_y)
         elif "ellipse" in shape_type or "circle" in shape_type:
-            # Correction for ellipse
-            cx = shape.x + shape.w / 2
-            cy = shape.y + shape.h / 2
-            dx = base_x - cx
-            dy = base_y - cy
-            
-            if shape.w > 0 and shape.h > 0:
-                denom_sq = (dx / (shape.w / 2))**2 + (dy / (shape.h / 2))**2
-                if denom_sq > 0:
-                    t = 1.0 / (denom_sq ** 0.5)
-                    x = cx + t * dx
-                    y = cy + t * dy
-                else:
-                    x = base_x
-                    y = base_y
-            else:
-                x = base_x
-                y = base_y
+            x, y = self._boundary_point_ellipse(shape, base_x, base_y)
         else:
-            # Normal rectangle (follow legacy implementation)
-            if rel_x <= 0.0:
-                # Left edge
-                x = shape.x
-                y = base_y
-            elif rel_x >= 1.0:
-                # Right edge
-                x = shape.x + shape.w
-                y = base_y
-            elif rel_y <= 0.0:
-                # Top edge
-                x = base_x
-                y = shape.y
-            elif rel_y >= 1.0:
-                # Bottom edge
-                x = base_x
-                y = shape.y + shape.h
-            else:
-                # For intermediate points, select nearest edge
-                dist_left = abs(base_x - shape.x)
-                dist_right = abs(base_x - (shape.x + shape.w))
-                dist_top = abs(base_y - shape.y)
-                dist_bottom = abs(base_y - (shape.y + shape.h))
-                
-                min_dist = min(dist_left, dist_right, dist_top, dist_bottom)
-                
-                if min_dist == dist_left:
-                    x = shape.x
-                    y = base_y
-                elif min_dist == dist_right:
-                    x = shape.x + shape.w
-                    y = base_y
-                elif min_dist == dist_top:
-                    x = base_x
-                    y = shape.y
-                else:  # dist_bottom
-                    x = base_x
-                    y = shape.y + shape.h
-
-        # Add offset only once (exitDx/exitDy, entryDx/entryDy)
-        x += offset_x
-        y += offset_y
-
-        return (x, y)
+            x, y = self._boundary_point_rect(shape, rel_x, rel_y, base_x, base_y)
+        return (x + offset_x, y + offset_y)
 
     def _auto_determine_ports(self, source_shape: ShapeElement, target_shape: ShapeElement, points: List[tuple] = None) -> tuple:
         """
