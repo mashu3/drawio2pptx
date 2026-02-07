@@ -93,4 +93,3 @@ def test_default_config():
     """Test default_config instance"""
     assert isinstance(default_config, ConversionConfig)
     assert default_config.scale_policy == 'none'
-

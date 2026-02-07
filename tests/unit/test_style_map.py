@@ -146,4 +146,3 @@ def test_map_corner_radius_rounded():
     result = map_corner_radius(True, 100.0, 50.0)
     assert result is not None
     assert 0 <= result <= 100000
-

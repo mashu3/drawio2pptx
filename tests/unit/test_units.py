@@ -105,4 +105,3 @@ def test_round_trip_conversions():
     pt = px_to_pt(px_value)
     px_back = pt_to_px(pt.pt)
     assert abs(px_back - px_value) < 0.1
-

@@ -66,4 +66,3 @@ def test_replace_font_with_custom_config():
     # Should not affect default config
     result2 = replace_font("Arial")
     assert result2 == "Arial"  # default_config has no replacement for Arial
-

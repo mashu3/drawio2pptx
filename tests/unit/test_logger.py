@@ -148,4 +148,3 @@ def test_conversion_logger_warn_coordinate_error_without_tolerance():
     
     assert len(logger.warnings) == 1
     assert logger.warnings[0].details['tolerance'] == 0.2
-

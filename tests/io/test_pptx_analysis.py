@@ -165,26 +165,6 @@ def analyze_shape(shape):
 class TestPPTXAnalysis:
     """Test class for PowerPoint file analysis"""
     
-    @pytest.fixture
-    def sample_pptx_path(self):
-        """Path to sample pptx file"""
-        # First, look for sample/sample.pptx
-        sample_pptx = Path(__file__).parent.parent / "sample" / "sample.pptx"
-        if sample_pptx.exists():
-            return sample_pptx
-        
-        # Otherwise, look for test_output.pptx
-        test_output = Path(__file__).parent.parent / "test_output.pptx"
-        if test_output.exists():
-            return test_output
-        
-        # Otherwise, look for output.pptx
-        output = Path(__file__).parent.parent / "output.pptx"
-        if output.exists():
-            return output
-        
-        pytest.skip("No sample PPTX file found")
-    
     def test_format_color_rgb(self):
         """Test RGB color formatting"""
         rgb = RGBColor(255, 0, 0)
@@ -250,7 +230,3 @@ class TestPPTXAnalysis:
                 
                 # fill is always set (even if None)
                 assert result['fill'] is not None
-
-
-
-

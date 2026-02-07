@@ -76,4 +76,3 @@ def test_apply_transform_combined():
     # Complex transformation, just verify it doesn't crash
     assert isinstance(x, float)
     assert isinstance(y, float)
-

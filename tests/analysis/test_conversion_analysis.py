@@ -114,7 +114,6 @@ def analyze_pptx_shape(shape):
                         'font_color': None,
                     }
                     
-                    # Get font color from XML
                     try:
                         if hasattr(run, '_r'):
                             run_element = run._r
@@ -160,34 +159,10 @@ def format_color_for_comparison(color):
 
 
 class TestConversionAnalysis:
-    """Test class for detailed analysis of conversion results"""
-    
-    @pytest.fixture
-    def sample_drawio_path(self):
-        """Path to sample drawio file"""
-        path = Path(__file__).parent.parent / "sample" / "sample.drawio"
-        if not path.exists():
-            pytest.skip(f"Sample file not found: {path}")
-        return path
-    
-    @pytest.fixture
-    def sample_pptx_path(self):
-        """Path to sample pptx file"""
-        # First, look for sample/sample.pptx
-        sample_pptx = Path(__file__).parent.parent / "sample" / "sample.pptx"
-        if sample_pptx.exists():
-            return sample_pptx
-        
-        # Otherwise, look for output.pptx
-        output = Path(__file__).parent.parent / "output.pptx"
-        if output.exists():
-            return output
-        
-        pytest.skip("No sample PPTX file found")
-    
+    """Test class for detailed analysis of conversion results (uses conftest sample_drawio_path / sample_pptx_path)."""
+
     def test_compare_shapes(self, sample_drawio_path, sample_pptx_path):
         """Compare shapes between draw.io and PowerPoint"""
-        # Load draw.io
         logger = get_logger()
         loader = DrawIOLoader(logger=logger)
         diagrams = loader.load_file(sample_drawio_path)
@@ -198,7 +173,6 @@ class TestConversionAnalysis:
         elements = loader.extract_elements(diagrams[0])
         shape_elements = [e for e in elements if hasattr(e, 'shape_type')]
         
-        # Load PowerPoint
         prs = Presentation(str(sample_pptx_path))
         if not prs.slides:
             pytest.skip("No slides found in PowerPoint file")
@@ -210,11 +184,9 @@ class TestConversionAnalysis:
         print(f"draw.io shapes: {len(shape_elements)}")
         print(f"PowerPoint shapes: {len(pptx_shapes)}\n")
         
-        # Compare each shape
         for idx, (drawio_shape, pptx_shape) in enumerate(zip(shape_elements, pptx_shapes), 1):
             print(f"--- Shape {idx} ---")
             
-            # Text
             drawio_text = ""
             if drawio_shape.text:
                 for para in drawio_shape.text:
@@ -232,7 +204,6 @@ class TestConversionAnalysis:
             print(f"  PowerPoint: '{pptx_text}'")
             print(f"  ✓" if drawio_text == pptx_text else f"  ✗ (mismatch)")
             
-            # Fill color
             drawio_fill = format_color_for_comparison(drawio_shape.style.fill)
             pptx_fill = "None"
             try:
@@ -249,11 +220,9 @@ class TestConversionAnalysis:
                         except (TypeError, AttributeError):
                             pass
                 
-                # Check from XML (for ThemeColor case)
                 if pptx_fill == "None" and hasattr(pptx_shape, '_element'):
                     shape_element = pptx_shape._element
                     nsmap = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
-                    # spPr exists as direct child element
                     sp_pr = None
                     for child in shape_element:
                         if child.tag.endswith('}spPr') or 'spPr' in child.tag:
@@ -282,7 +251,6 @@ class TestConversionAnalysis:
             print(f"Fill:")
             print(f"  draw.io: {drawio_fill}")
             print(f"  PowerPoint: {pptx_fill}")
-            # For ThemeColor case, consider as match
             if drawio_fill == "ThemeColor" and "ThemeColor" in pptx_fill:
                 print(f"  ✓")
             elif drawio_fill == pptx_fill or (drawio_fill == "None" and pptx_fill == "None"):
@@ -290,7 +258,6 @@ class TestConversionAnalysis:
             else:
                 print(f"  ✗ (mismatch)")
             
-            # Stroke color
             drawio_stroke = format_color_for_comparison(drawio_shape.style.stroke)
             pptx_stroke = "None"
             pptx_result = analyze_pptx_shape(pptx_shape)
@@ -301,7 +268,6 @@ class TestConversionAnalysis:
             print(f"  draw.io: {drawio_stroke}")
             print(f"  PowerPoint: {pptx_stroke}")
             
-            # Shadow
             drawio_shadow = drawio_shape.style.has_shadow
             pptx_shadow = pptx_result['has_shadow']
             print(f"Shadow:")
@@ -309,12 +275,10 @@ class TestConversionAnalysis:
             print(f"  PowerPoint: {pptx_shadow}")
             print(f"  ✓" if drawio_shadow == pptx_shadow else f"  ✗ (mismatch)")
             
-            # Font information
             if drawio_shape.text and pptx_shape.has_text_frame:
                 drawio_runs = []
                 for para in drawio_shape.text:
                     drawio_runs.extend(para.runs)
-                
                 pptx_runs = []
                 for para in pptx_shape.text_frame.paragraphs:
                     pptx_runs.extend(para.runs)
@@ -322,54 +286,40 @@ class TestConversionAnalysis:
                 print(f"Font information:")
                 for run_idx, (drawio_run, pptx_run) in enumerate(zip(drawio_runs, pptx_runs), 1):
                     print(f"  Run {run_idx}:")
-                    
-                    # Font color
                     drawio_color = format_color_for_comparison(drawio_run.font_color)
                     pptx_color = "None"
-                    pptx_run_info = analyze_pptx_shape(pptx_shape)
-                    if pptx_run_info['text_frame'] and pptx_run_info['text_frame']['runs']:
-                        if run_idx <= len(pptx_run_info['text_frame']['runs']):
-                            pptx_color = pptx_run_info['text_frame']['runs'][run_idx-1].get('font_color', 'None')
-                    
+                    if pptx_result['text_frame'] and pptx_result['text_frame']['runs']:
+                        if run_idx <= len(pptx_result['text_frame']['runs']):
+                            pptx_color = pptx_result['text_frame']['runs'][run_idx-1].get('font_color', 'None')
                     print(f"    Font color:")
                     print(f"      draw.io: {drawio_color}")
                     print(f"      PowerPoint: {pptx_color}")
-                    
-                    # Bold
                     pptx_bold = pptx_run.font.bold if pptx_run.font.bold else False
                     print(f"    Bold:")
                     print(f"      draw.io: {drawio_run.bold}")
                     print(f"      PowerPoint: {pptx_bold}")
                     print(f"      ✓" if drawio_run.bold == pptx_bold else f"      ✗ (mismatch)")
-                    
-                    # Font size
                     drawio_size = drawio_run.font_size
                     pptx_size = pptx_run.font.size.pt if pptx_run.font.size else None
                     print(f"    Font size:")
                     print(f"      draw.io: {drawio_size}")
                     print(f"      PowerPoint: {pptx_size}")
-                    
-                    # Font name
                     drawio_font = drawio_run.font_family
                     pptx_font = pptx_run.font.name
                     print(f"    Font name:")
                     print(f"      draw.io: {drawio_font}")
                     print(f"      PowerPoint: {pptx_font}")
             
-            # Vertical alignment
             if drawio_shape.text:
                 drawio_vertical = drawio_shape.text[0].vertical_align if drawio_shape.text else None
             else:
                 drawio_vertical = None
-            
             pptx_vertical = None
             if pptx_shape.has_text_frame:
                 pptx_vertical = str(pptx_shape.text_frame.vertical_anchor)
-            
             print(f"Vertical alignment:")
             print(f"  draw.io: {drawio_vertical}")
             print(f"  PowerPoint: {pptx_vertical}")
-            
             print()
     
     def test_list_converted_features(self, sample_drawio_path, sample_pptx_path):
@@ -392,31 +342,21 @@ class TestConversionAnalysis:
         converted = []
         not_converted = []
         
-        # Check each feature
         for element in elements:
             if hasattr(element, 'shape_type'):
-                # Shape type
                 converted.append(f"Shape type: {element.shape_type}")
-                
-                # Fill
                 if element.style.fill:
                     converted.append("Fill color")
                 else:
                     converted.append("No fill")
-                
-                # Stroke
                 if element.style.stroke:
                     converted.append("Stroke color")
                 else:
                     converted.append("No stroke")
-                
-                # Shadow
                 if element.style.has_shadow:
                     converted.append("Shadow")
                 else:
                     converted.append("No shadow")
-                
-                # Text
                 if element.text:
                     converted.append("Text")
                     for para in element.text:
@@ -437,14 +377,9 @@ class TestConversionAnalysis:
         print("\n=== Converted Features ===")
         for feature in set(converted):
             print(f"  ✓ {feature}")
-        
         print("\n=== Not Converted Features ===")
         if not_converted:
             for feature in set(not_converted):
                 print(f"  ✗ {feature}")
         else:
             print("  (All features are converted)")
-
-
-
-

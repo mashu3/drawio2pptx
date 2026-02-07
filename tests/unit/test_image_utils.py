@@ -51,4 +51,3 @@ def test_save_image_to_media():
     from pathlib import Path
     result = save_image_to_media(b"test", Path("/tmp"), "test.png")
     assert result is None
-

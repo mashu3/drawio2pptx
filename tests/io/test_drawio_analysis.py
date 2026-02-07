@@ -170,14 +170,6 @@ def analyze_mxcell(cell):
 class TestDrawIOAnalysis:
     """Test class for drawio file analysis"""
     
-    @pytest.fixture
-    def sample_drawio_path(self):
-        """Path to sample drawio file"""
-        path = Path(__file__).parent.parent / "sample" / "sample.drawio"
-        if not path.exists():
-            pytest.skip(f"Sample file not found: {path}")
-        return path
-    
     def test_parse_color_hex(self):
         """Test hexadecimal color parsing"""
         assert parse_color("#FF0000") == "RGB(255, 0, 0) / #FF0000"
@@ -253,7 +245,3 @@ class TestDrawIOAnalysis:
         diagrams = loader.load_file(sample_drawio_path)
         
         assert len(diagrams) > 0, "DrawIOLoader must return at least one diagram"
-
-
-
-

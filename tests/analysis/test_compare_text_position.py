@@ -97,7 +97,7 @@ def extract_drawio_text_properties(drawio_path):
                     'spacingBottom': extract_style_value(style, "spacingBottom"),
                     'spacingRight': extract_style_value(style, "spacingRight"),
                 }
-                if any(props.values()):  # At least one property is set
+                if any(props.values()):
                     properties.append(props)
     
     return properties
@@ -148,52 +148,17 @@ def extract_pptx_text_properties(pptx_path):
 
 
 class TestTextPositionComparison:
-    """Test class for comparing text positions between drawio and PowerPoint"""
-    
-    @pytest.fixture
-    def sample_drawio_path(self):
-        """Path to sample drawio file"""
-        path = Path(__file__).parent.parent / "sample" / "sample.drawio"
-        if not path.exists():
-            pytest.skip(f"Sample file not found: {path}")
-        return path
-    
-    @pytest.fixture
-    def sample_pptx_path(self):
-        """Path to sample pptx file"""
-        # First, look for sample/sample.pptx
-        sample_pptx = Path(__file__).parent.parent / "sample" / "sample.pptx"
-        if sample_pptx.exists():
-            return sample_pptx
-        
-        # Otherwise, look for test_output.pptx
-        test_output = Path(__file__).parent.parent / "test_output.pptx"
-        if test_output.exists():
-            return test_output
-        
-        # Otherwise, look for output.pptx
-        output = Path(__file__).parent.parent / "output.pptx"
-        if output.exists():
-            return output
-        
-        pytest.skip("No sample PPTX file found")
-    
+    """Test class for comparing text positions (uses conftest sample_drawio_path / sample_pptx_path)."""
+
     def test_drawio_text_properties_extraction(self, sample_drawio_path):
         """Verify text properties can be correctly extracted from drawio file"""
         properties = extract_drawio_text_properties(sample_drawio_path)
-        
-        # If at least one shape exists, properties may be extracted
-        # (Some shapes may not have text properties set, so empty is OK)
         assert isinstance(properties, list)
     
     def test_pptx_text_properties_extraction(self, sample_pptx_path):
         """Verify text properties can be correctly extracted from PowerPoint file"""
         properties = extract_pptx_text_properties(sample_pptx_path)
-        
-        # Verify at least one text frame exists
         assert len(properties) > 0
-        
-        # Verify each property has correct structure
         for props in properties:
             assert 'vertical_anchor' in props
             assert 'margin_top' in props
@@ -205,8 +170,6 @@ class TestTextPositionComparison:
         """Compare text properties between drawio and PowerPoint"""
         drawio_props = extract_drawio_text_properties(sample_drawio_path)
         pptx_props = extract_pptx_text_properties(sample_pptx_path)
-        
-        # Verify properties can be extracted from both files
         assert isinstance(drawio_props, list)
         assert isinstance(pptx_props, list)
         assert len(pptx_props) > 0
@@ -214,23 +177,13 @@ class TestTextPositionComparison:
     def test_drawio_has_text_properties(self, sample_drawio_path):
         """Verify drawio file has text properties defined"""
         properties = extract_drawio_text_properties(sample_drawio_path)
-        
-        # Check if any shape has text properties set
-        has_text_props = any(
-            any(props.values()) for props in properties
-        )
-        
-        # Whether properties exist depends on the file, so just check
+        has_text_props = any(any(props.values()) for props in properties)
         assert isinstance(has_text_props, bool)
     
     def test_pptx_has_text_frame_properties(self, sample_pptx_path):
         """Verify PowerPoint file has text frame properties set"""
         properties = extract_pptx_text_properties(sample_pptx_path)
-        
-        # Verify at least one text frame exists
         assert len(properties) > 0
-        
-        # Check if text frame properties are set
         has_props = any(
             props['vertical_anchor'] is not None or
             props['margin_top'] != 0 or
@@ -239,17 +192,13 @@ class TestTextPositionComparison:
             props['margin_right'] != 0
             for props in properties
         )
-        
-        # Whether properties are set depends on the file, so just check
         assert isinstance(has_props, bool)
     
     def test_paragraph_comparison(self, sample_pptx_path):
         """Verify paragraph properties in PowerPoint file"""
         properties = extract_pptx_text_properties(sample_pptx_path)
-        
         for props in properties:
             for paragraph in props['paragraphs']:
-                # Verify paragraph properties are correctly extracted
                 assert 'space_before' in paragraph
                 assert 'space_after' in paragraph
                 assert 'runs' in paragraph
@@ -258,15 +207,8 @@ class TestTextPositionComparison:
     def test_font_properties_comparison(self, sample_pptx_path):
         """Compare font properties"""
         properties = extract_pptx_text_properties(sample_pptx_path)
-        
         for props in properties:
             for paragraph in props['paragraphs']:
                 for run in paragraph['runs']:
-                    # Verify font properties are correctly extracted
                     assert 'font_size' in run
-                    # font_size is None or numeric
                     assert run['font_size'] is None or isinstance(run['font_size'], (int, float))
-
-
-
-

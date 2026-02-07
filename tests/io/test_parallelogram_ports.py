@@ -64,6 +64,3 @@ def test_parallelogram_corners_match_rel_coordinates():
     x, y = loader._calculate_boundary_point(shape, rel_x=1.0, rel_y=1.0, offset_x=0.0, offset_y=0.0)
     assert _approx(x, shape.x + shape.w - offset)
     assert _approx(y, shape.y + shape.h)
-
-
-
