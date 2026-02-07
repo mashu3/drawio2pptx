@@ -13,7 +13,8 @@ class TextRun:
     """Text run (inline formatting unit)"""
     text: str
     font_family: Optional[str] = None
-    font_size: Optional[float] = None  # pt
+    # NOTE: This is the draw.io fontSize unit (best-effort), later scaled to PPTX points in the writer.
+    font_size: Optional[float] = None
     font_color: Optional[RGBColor] = None
     bold: bool = False
     italic: bool = False
@@ -33,6 +34,10 @@ class TextParagraph:
     spacing_right: Optional[float] = None  # px
     line_spacing: Optional[float] = None
     bullet_style: Optional[str] = None  # Bullet style
+    # Paragraph spacing (PowerPoint paragraph spacing) in points.
+    # Used to emulate HTML block element margins (e.g., <h1> ... </h1> followed by <p> ...).
+    space_before_pt: Optional[float] = None
+    space_after_pt: Optional[float] = None
 
 
 @dataclass
@@ -73,6 +78,9 @@ class Style:
     # Text wrapping (draw.io: whiteSpace=wrap/nowrap). True for wrap, False for nowrap.
     # Default is True (wrap) to match draw.io's default behavior.
     word_wrap: bool = True
+    # Text overflow clipping (draw.io: overflow=hidden). When True, clip overflowing glyphs
+    # inside the text rectangle (best-effort; PowerPoint supports bodyPr@vertOverflow/horzOverflow="clip").
+    clip_text: bool = False
     # Swimlane/container metadata (draw.io: swimlane; startSize; horizontal; swimlaneFillColor)
     is_swimlane: bool = False
     swimlane_start_size: Optional[float] = None  # px

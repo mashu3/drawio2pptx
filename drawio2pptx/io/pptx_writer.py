@@ -133,7 +133,21 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to apply step gap: {e}")
-        
+
+        # Arrow shapes: draw.io geometry is in page coordinates (horizontal × vertical).
+        # PPTX arrow defaults to right; we set rotation 90°/270° for up/down. So we add shape with (w, h),
+        # then rotate — after rotation the box becomes (h, w). Swap w/h for 90°/270° so the final visual box matches (shape.w, shape.h).
+        # Adjust position so the visual top-left after rotation stays at (shape.x, shape.y): place unrotated shape so its center becomes (shape.x + shape.w/2, shape.y + shape.h/2).
+        try:
+            if (shape.shape_type or "").lower() in ("right_arrow", "notched_right_arrow"):
+                rot = float(getattr(shape.transform, "rotation", 0.0) or 0.0) % 360.0
+                if abs(rot - 90.0) < 1.0 or abs(rot - 270.0) < 1.0:
+                    width, height = height, width
+                    left = px_to_emu(shape.x + (shape.w - shape.h) / 2.0)
+                    top = px_to_emu(shape.y + (shape.h - shape.w) / 2.0)
+        except Exception:
+            pass
+
         shp = slide.shapes.add_shape(
             pptx_shape_type,
             left, top, width, height
@@ -170,9 +184,25 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set step chevron adjustment: {e}")
-        
-        # Set text
-        if shape.text:
+
+        # Apply rotation/flip (draw.io: rotation/flipH/flipV) when present.
+        try:
+            self._apply_shape_transform(shp, shape)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to apply shape transform: {e}")
+
+        # If the shape is flipped (flipH/flipV), flipping via <a:xfrm> also flips the text in PowerPoint.
+        # draw.io typically keeps label glyphs upright. Work around by rendering the label as a separate
+        # transparent textbox overlay (not flipped), while keeping the shape geometry flipped.
+        shape_is_flipped = False
+        try:
+            shape_is_flipped = bool(getattr(shape.transform, "flip_h", False) or getattr(shape.transform, "flip_v", False))
+        except Exception:
+            shape_is_flipped = False
+
+        # Set text (inside the shape when not flipped)
+        if shape.text and not shape_is_flipped:
             margin_overrides = None
             text_direction = None
             try:
@@ -214,6 +244,7 @@ class PPTXWriter:
                 word_wrap=shape.style.word_wrap,
                 margin_overrides_px=margin_overrides,
                 text_direction=text_direction,
+                clip_overflow=bool(getattr(shape.style, "clip_text", False)),
             )
         
         # Set fill
@@ -308,8 +339,138 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to add BPMN symbol overlay: {e}")
+
+        # Text overlay for flipped shapes (keep glyphs upright)
+        if shape.text and shape_is_flipped:
+            try:
+                self._add_shape_text_overlay(slide, shape)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to add flipped-shape text overlay: {e}")
         
         return shp
+
+    def _add_shape_text_overlay(self, slide, shape: ShapeElement):
+        """Render shape label as a transparent textbox overlay (used for flipped shapes)."""
+        if not shape.text or shape.w <= 0 or shape.h <= 0:
+            return None
+
+        left = px_to_emu(shape.x)
+        top = px_to_emu(shape.y)
+        width = px_to_emu(shape.w)
+        height = px_to_emu(shape.h)
+
+        tb = slide.shapes.add_textbox(left, top, width, height)
+        try:
+            if shape.id:
+                tb.name = f"drawio2pptx:shape-text-overlay:{shape.id}"
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set overlay text box name: {e}")
+
+        # Transparent textbox background/line.
+        try:
+            tb.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set overlay textbox fill background: {e}")
+        try:
+            tb.line.fill.background()
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to set overlay textbox line background: {e}")
+
+        # Apply the same paragraph formatting.
+        margin_overrides = None
+        text_direction = None
+        try:
+            if getattr(shape.style, "is_swimlane", False):
+                # Keep swimlane logic consistent (rare for flipped shapes, but safe).
+                start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
+                if start_size > 0:
+                    first_para = shape.text[0]
+                    base_top = first_para.spacing_top or 0.0
+                    base_left = first_para.spacing_left or 0.0
+                    base_bottom = first_para.spacing_bottom or 0.0
+                    base_right = first_para.spacing_right or 0.0
+                    if getattr(shape.style, "swimlane_horizontal", False):
+                        margin_overrides = (
+                            base_top,
+                            base_left,
+                            max(shape.h - start_size + base_bottom, 0.0),
+                            base_right,
+                        )
+                    else:
+                        text_direction = "vert270"
+                        margin_overrides = (
+                            base_top,
+                            base_left,
+                            base_bottom,
+                            max(shape.w - start_size + base_right, 0.0),
+                        )
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to compute overlay margins: {e}")
+
+        self._set_text_frame(
+            tb.text_frame,
+            shape.text,
+            default_highlight_color=shape.style.label_background_color,
+            word_wrap=shape.style.word_wrap,
+            margin_overrides_px=margin_overrides,
+            text_direction=text_direction,
+            clip_overflow=bool(getattr(shape.style, "clip_text", False)),
+        )
+
+        return tb
+
+    def _apply_shape_transform(self, shp, shape: ShapeElement) -> None:
+        """Apply shape rotation/flip from the intermediate model to the PPTX shape."""
+        if not hasattr(shape, "transform") or shape.transform is None:
+            return
+
+        # Rotation (degrees). python-pptx supports shape.rotation for AutoShapes.
+        try:
+            rot = float(getattr(shape.transform, "rotation", 0.0) or 0.0)
+            if abs(rot) > 1e-6:
+                try:
+                    shp.rotation = rot
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Flip (OpenXML: a:xfrm@flipH / a:xfrm@flipV). No public python-pptx API; set via XML.
+        flip_h = bool(getattr(shape.transform, "flip_h", False))
+        flip_v = bool(getattr(shape.transform, "flip_v", False))
+        if flip_h or flip_v:
+            self._set_flip_xml(shp, flip_h=flip_h, flip_v=flip_v)
+
+    def _set_flip_xml(self, shape, flip_h: bool = False, flip_v: bool = False) -> None:
+        """Set flipH/flipV on <a:xfrm> via XML for preset shapes."""
+        try:
+            if not hasattr(shape, "_element"):
+                return
+            shape_element = shape._element
+
+            xfrm = shape_element.find(".//a:xfrm", namespaces=NSMAP_DRAWINGML)
+            if xfrm is None:
+                # Fallback: namespace-qualified tag search
+                xfrm = shape_element.find(f".//{_a('xfrm')}")
+            if xfrm is None:
+                return
+
+            if flip_h:
+                xfrm.set("flipH", "1")
+            else:
+                xfrm.attrib.pop("flipH", None)
+
+            if flip_v:
+                xfrm.set("flipV", "1")
+            else:
+                xfrm.attrib.pop("flipV", None)
+        except Exception:
+            return None
 
     def _add_line_shape(self, slide, shape: ShapeElement):
         """Add line shape (draw.io line vertex) as a connector."""
@@ -436,6 +597,15 @@ class PPTXWriter:
         """Add connector as a single polyline shape."""
         if not connector.points or len(connector.points) < 2:
             return None
+
+        # Orthogonal connectors should preserve segment structure to match draw.io stacking
+        # and for reliable z-order testing/debugging (each segment gets its own name).
+        try:
+            if (connector.edge_style or "").lower() == "orthogonal":
+                return self._add_orthogonal_connector(slide, connector)
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"Failed to add orthogonal connector: {e}")
 
         # Simplify nearly straight polylines to avoid jitter in Freeform.
         points_px = self._simplify_polyline_points(connector.points, tol_px=0.5)
@@ -804,6 +974,7 @@ class PPTXWriter:
                 text_element.text,
                 default_highlight_color=text_element.style.label_background_color,
                 word_wrap=text_element.style.word_wrap,
+                clip_overflow=bool(getattr(text_element.style, "clip_text", False)),
             )
 
         return tb
@@ -1278,6 +1449,7 @@ class PPTXWriter:
         word_wrap: bool = True,
         margin_overrides_px: Optional[Tuple[float, float, float, float]] = None,
         text_direction: Optional[str] = None,
+        clip_overflow: bool = False,
     ):
         """Set text frame"""
         if not paragraphs:
@@ -1299,20 +1471,30 @@ class PPTXWriter:
         first_para = paragraphs[0]
         if margin_overrides_px is not None:
             top_px, left_px, bottom_px, right_px = margin_overrides_px
-            text_frame.margin_top = px_to_emu(top_px or 0)
-            text_frame.margin_left = px_to_emu(left_px or 0)
-            text_frame.margin_bottom = px_to_emu(bottom_px or 0)
-            text_frame.margin_right = px_to_emu(right_px or 0)
         else:
             top_px = first_para.spacing_top or 0
             left_px = first_para.spacing_left or 0
             bottom_px = first_para.spacing_bottom or 0
             right_px = first_para.spacing_right or 0
-            text_frame.margin_top = px_to_emu(top_px)
-            text_frame.margin_left = px_to_emu(left_px)
-            text_frame.margin_bottom = px_to_emu(bottom_px)
-            text_frame.margin_right = px_to_emu(right_px)
-        
+
+        # When overflow=hidden (clip_overflow), ignore negative margins so text does not
+        # get pushed outside the shape and appear to overflow at the top.
+        if clip_overflow:
+            try:
+                top_px = max(float(top_px or 0), 0.0)
+                left_px = max(float(left_px or 0), 0.0)
+                bottom_px = max(float(bottom_px or 0), 0.0)
+                right_px = max(float(right_px or 0), 0.0)
+            except (TypeError, ValueError):
+                top_px = max(top_px or 0, 0.0)
+                left_px = max(left_px or 0, 0.0)
+                bottom_px = max(bottom_px or 0, 0.0)
+                right_px = max(right_px or 0, 0.0)
+
+        text_frame.margin_top = px_to_emu(top_px or 0)
+        text_frame.margin_left = px_to_emu(left_px or 0)
+        text_frame.margin_bottom = px_to_emu(bottom_px or 0)
+        text_frame.margin_right = px_to_emu(right_px or 0)
         margin_px = (top_px or 0, left_px or 0, bottom_px or 0, right_px or 0)
         
         # Set vertical anchor (similar to legacy: default is middle)
@@ -1325,6 +1507,9 @@ class PPTXWriter:
         saved_vertical_anchor, anchor_value = VERTICAL_ALIGN_MAP.get(
             vertical_align, (MSO_ANCHOR.MIDDLE, 'ctr')
         )
+
+        # Note: clip_overflow now uses normAutofit (shrink-to-fit) instead of hard-clipping,
+        # so negative inset + anchor adjustments are no longer needed.
         
         # Clear existing paragraphs
         text_frame.clear()
@@ -1340,9 +1525,30 @@ class PPTXWriter:
         # Add paragraphs
         for para_data in paragraphs:
             p = text_frame.add_paragraph()
-            p.space_before = Pt(0)
-            p.space_after = Pt(0)
-            p.line_spacing = 1.0
+            # Paragraph spacing: default to 0 to keep existing behavior unless the parser requests spacing.
+            try:
+                if getattr(para_data, "space_before_pt", None) is not None:
+                    p.space_before = Pt(float(para_data.space_before_pt))
+                else:
+                    p.space_before = Pt(0)
+            except Exception:
+                p.space_before = Pt(0)
+            try:
+                if getattr(para_data, "space_after_pt", None) is not None:
+                    p.space_after = Pt(float(para_data.space_after_pt))
+                else:
+                    p.space_after = Pt(0)
+            except Exception:
+                p.space_after = Pt(0)
+
+            # Line spacing: keep legacy default unless explicitly provided.
+            try:
+                if para_data.line_spacing is not None:
+                    p.line_spacing = float(para_data.line_spacing)
+                else:
+                    p.line_spacing = 1.0
+            except Exception:
+                p.line_spacing = 1.0
             
             # Horizontal alignment
             HORIZONTAL_ALIGN_MAP = {
@@ -1414,12 +1620,9 @@ class PPTXWriter:
         text_frame.vertical_anchor = saved_vertical_anchor
         
         # Set vertical anchor via XML (similar to legacy: workaround for python-pptx bug)
-        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap, margin_px)
+        self._set_vertical_anchor_xml(text_frame, anchor_value, word_wrap, margin_px, clip_overflow=clip_overflow)
         
-        # Set spacing of all paragraphs to 0 (similar to legacy: affects vertical alignment)
-        for para in text_frame.paragraphs:
-            para.space_before = Pt(0)
-            para.space_after = Pt(0)
+        # Do not override per-paragraph spacing here; it is used to emulate HTML block margins.
     
     def _set_vertical_anchor_xml(
         self,
@@ -1427,6 +1630,7 @@ class PPTXWriter:
         anchor_value: str,
         word_wrap: bool = True,
         margin_px: Optional[Tuple[float, float, float, float]] = None,
+        clip_overflow: bool = False,
     ):
         """Set vertical anchor via XML"""
         try:
@@ -1445,6 +1649,29 @@ class PPTXWriter:
                 # 'square' enables wrapping, 'none' disables it
                 wrap_value = 'square' if word_wrap else 'none'
                 body_pr.set('wrap', wrap_value)
+                # Overflow handling when requested (draw.io: overflow=hidden).
+                # Instead of hard-clipping (which hides visible glyphs), use
+                # <a:normAutofit/> to auto-shrink text so it fits inside the shape.
+                # This keeps all text readable while respecting the bounding box.
+                if clip_overflow:
+                    body_pr.attrib.pop('vertOverflow', None)
+                    body_pr.attrib.pop('horzOverflow', None)
+                    # Remove any existing autofit children
+                    for autofit_tag in ('noAutofit', 'normAutofit', 'spAutoFit'):
+                        for existing in body_pr.findall(f'.//a:{autofit_tag}', namespaces=NSMAP_DRAWINGML):
+                            try:
+                                body_pr.remove(existing)
+                            except Exception:
+                                pass
+                        for existing in body_pr.findall(f'{_a(autofit_tag)}'):
+                            try:
+                                body_pr.remove(existing)
+                            except Exception:
+                                pass
+                    ET.SubElement(body_pr, _a('normAutofit'))
+                else:
+                    body_pr.attrib.pop('vertOverflow', None)
+                    body_pr.attrib.pop('horzOverflow', None)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set vertical anchor XML: {e}")

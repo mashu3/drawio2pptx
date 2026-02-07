@@ -43,6 +43,8 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     'extract': MSO_SHAPE.FLOWCHART_EXTRACT,
     'merge': MSO_SHAPE.FLOWCHART_MERGE,
     'merge_or_storage': MSO_SHAPE.FLOWCHART_MERGE,
+    # Off-page connector (draw.io: offPageConnector; PowerPoint: Flowchart Off-page connector)
+    'offpageconnector': MSO_SHAPE.FLOWCHART_OFFPAGE_CONNECTOR,
     # Polygon shapes
     'hexagon': MSO_SHAPE.HEXAGON,
     'pentagon': MSO_SHAPE.REGULAR_PENTAGON,
@@ -57,6 +59,9 @@ _SHAPE_TYPE_MAP: dict[str, MSO_SHAPE] = {
     '8_point_star': MSO_SHAPE.STAR_8_POINT,
     # Smiley face
     'smiley': MSO_SHAPE.SMILEY_FACE,
+    # Arrows (vertex shapes)
+    'right_arrow': MSO_SHAPE.RIGHT_ARROW,
+    'notched_right_arrow': MSO_SHAPE.NOTCHED_RIGHT_ARROW,
 }
 
 

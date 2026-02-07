@@ -126,6 +126,10 @@ class StyleExtractor:
         'mxgraph.flowchart.merge_or_storage': 'merge',
         # mxgraph.bpmn shapes (gateways are typically diamond-shaped)
         'mxgraph.bpmn.shape': 'rhombus',
+        # Arrows (as vertex shapes)
+        'mxgraph.arrows2.arrow': 'right_arrow',
+        # diagrams.net "Stylised Arrow" is closer to PPTX's notched block arrow than a plain right arrow.
+        'mxgraph.arrows2.stylisedarrow': 'notched_right_arrow',
     }
     
     # Font style bit flags: bit position -> attribute name
@@ -574,12 +578,24 @@ class DrawIOLoader:
         """
         page_width = mgm_root.attrib.get("pageWidth")
         page_height = mgm_root.attrib.get("pageHeight")
+        page_scale_str = mgm_root.attrib.get("pageScale") or mgm_root.attrib.get("scale")
+        page_scale = 1.0
+        if page_scale_str:
+            try:
+                page_scale = float(page_scale_str)
+                if page_scale <= 0:
+                    page_scale = 1.0
+            except ValueError:
+                page_scale = 1.0
         
         if page_width and page_height:
             try:
                 width = float(page_width)
                 height = float(page_height)
-                return (width, height)
+                # diagrams.net stores pageWidth/pageHeight in "page units" and uses pageScale
+                # to derive the effective canvas size. Without this, diagrams authored with
+                # pageScale != 1 can appear shifted/clipped in PowerPoint.
+                return (width * page_scale, height * page_scale)
             except ValueError:
                 pass
         
@@ -699,16 +715,6 @@ class DrawIOLoader:
                     try:
                         if connector.id is not None:
                             connector.z_index = cell_order.get(connector.id, 0)
-                            # Ensure connectors are drawn above their endpoints.
-                            # Some draw.io exports place edges before vertices; PPTX would then hide arrowheads.
-                            try:
-                                src_z = shapes_dict.get(connector.source_id).z_index if connector.source_id in shapes_dict else None
-                                tgt_z = shapes_dict.get(connector.target_id).z_index if connector.target_id in shapes_dict else None
-                                max_z = max(z for z in (src_z, tgt_z) if z is not None)
-                                if connector.z_index <= max_z:
-                                    connector.z_index = max_z + 1
-                            except Exception:
-                                pass
                     except Exception as e:
                         if self.logger:
                             self.logger.debug(f"Failed to set z_index for connector {connector.id}: {e}")
@@ -925,16 +931,61 @@ class DrawIOLoader:
         stroke_width = self.style_extractor.extract_style_float(style_str, "strokeWidth", 1.0)
         is_text_style = self.style_extractor.is_text_style(style_str)
         no_stroke = is_text_style or self.style_extractor.extract_no_stroke(cell)
+
+        # Extract basic transform (rotation/flip) used by some vertex shapes.
+        # draw.io style keys: rotation=<deg>, flipH=1, flipV=1
+        try:
+            rotation = float(self.style_extractor.extract_style_float(style_str, "rotation", 0.0) or 0.0)
+        except Exception:
+            rotation = 0.0
+        flip_h = (self.style_extractor.extract_style_value(style_str, "flipH") or "").strip() == "1"
+        flip_v = (self.style_extractor.extract_style_value(style_str, "flipV") or "").strip() == "1"
+        # Arrow vertex shapes: draw.io uses "direction" (north/south/east/west) + flipV/flipH.
+        # PPTX arrow defaults to east (right). Arrow shapes are symmetric so flip in PPTX doesn't
+        # change tip direction; fold direction + flip into a single rotation and clear flip so the
+        # writer only applies rotation.
+        if shape_type in ("right_arrow", "notched_right_arrow"):
+            direction = (self.style_extractor.extract_style_value(style_str, "direction") or "").strip().lower()
+            if direction:
+                dir_to_angle = {"north": 270.0, "south": 90.0, "east": 0.0, "west": 180.0}
+                if direction in dir_to_angle:
+                    rotation = dir_to_angle[direction]
+                    # flipV: north<->south, flipH: east<->west
+                    if flip_v:
+                        rotation = (rotation + 180.0) % 360.0
+                    if flip_h:
+                        rotation = (rotation + 180.0) % 360.0
+                    flip_h = False
+                    flip_v = False
+        transform = Transform(rotation=rotation, flip_h=flip_h, flip_v=flip_v)
         
         # Extract whiteSpace (text wrapping) setting
-        # draw.io: whiteSpace=wrap (default) enables text wrapping, whiteSpace=nowrap disables it
+        # draw.io style key: whiteSpace=wrap enables text wrapping, whiteSpace=nowrap disables it.
+        #
+        # Policy in this converter:
+        # - If whiteSpace is explicitly set to "wrap": enable wrapping.
+        # - If whiteSpace is explicitly set to "nowrap": disable wrapping.
+        # - If whiteSpace is not specified: treat as "unspecified" and default to NO wrapping.
+        #
+        # Rationale: PowerPoint can wrap a single long word at the character level when wrapping is enabled,
+        # producing artifacts like "STRANGER" + "S". When draw.io doesn't explicitly request wrapping,
+        # we prefer preserving single-line labels.
         white_space = self.style_extractor.extract_style_value(style_str, "whiteSpace")
-        word_wrap = True  # Default is wrap (draw.io's default)
-        if white_space and white_space.lower() == "nowrap":
+        if white_space is None:
             word_wrap = False
-        # For draw.io text shapes, default behavior is no wrapping unless explicitly set.
-        if white_space is None and is_text_style:
-            word_wrap = False
+        else:
+            ws = white_space.lower().strip()
+            if ws == "nowrap":
+                word_wrap = False
+            elif ws == "wrap":
+                word_wrap = True
+            else:
+                # Unknown value: keep conservative behavior (no wrap).
+                word_wrap = False
+
+        # Extract overflow=hidden (draw.io). In PowerPoint, we emulate it with bodyPr overflow clipping.
+        overflow_value = self.style_extractor.extract_style_value(style_str, "overflow")
+        clip_text = (overflow_value or "").strip().lower() == "hidden"
         
         # Extract rounded attribute (corner radius)
         # draw.io: rounded=1 enables corner radius, rounded=0 disables it
@@ -956,6 +1007,20 @@ class DrawIOLoader:
 
         # Extract text
         text_paragraphs = self._extract_text(text_raw, font_color, style_str)
+
+        # PowerPoint may wrap long words at the character level when word_wrap is enabled.
+        # draw.io typically does not break a single word (no whitespace) into multiple lines.
+        # Heuristic: disable wrapping for whitespace-free labels to avoid cases like
+        # "STRANGERS" -> "STRANGER" + "S".
+        if word_wrap and text_paragraphs:
+            try:
+                def _para_text(p: TextParagraph) -> str:
+                    return "".join((r.text or "") for r in (p.runs or []))
+                if all((re.search(r"\s", _para_text(p)) is None) for p in text_paragraphs):
+                    word_wrap = False
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to apply nowrap heuristic: {e}")
         
         # Create style
         style = Style(
@@ -969,6 +1034,7 @@ class DrawIOLoader:
             label_background_color=label_bg_color,
             has_shadow=has_shadow,
             word_wrap=word_wrap,
+            clip_text=clip_text,
             no_stroke=no_stroke,
             bpmn_symbol=bpmn_symbol,
             step_size_px=step_size,
@@ -1006,6 +1072,7 @@ class DrawIOLoader:
             shape_type=shape_type,
             text=text_paragraphs,
             style=style,
+            transform=transform,
             z_index=0  # TODO: extract z-index
         )
         

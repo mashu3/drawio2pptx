@@ -105,17 +105,17 @@ def pt_to_px(pt: float) -> float:
     return pt / PT_PER_PX
 
 
-def scale_font_size_for_pptx(font_size_pt: float) -> float:
+def scale_font_size_for_pptx(font_size_drawio: float) -> float:
     """
-    Scale convert draw.io font size (points) for PowerPoint
+    Scale convert draw.io font size for PowerPoint
     
     Since draw.io and PowerPoint have different coordinate systems, font size also needs to be scaled.
     Considering coordinate transformation, font size also needs to be scaled similarly.
     
     Args:
-        font_size_pt: draw.io font size (points)
+        font_size_drawio: draw.io font size (draw.io units; often behaves like px)
     
     Returns:
         PowerPoint font size (points)
     """
-    return font_size_pt * FONT_SIZE_SCALE
+    return font_size_drawio * FONT_SIZE_SCALE
