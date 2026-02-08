@@ -1071,6 +1071,20 @@ class DrawIOLoader:
             return "v"
         return None
 
+    def _are_shapes_horizontally_aligned(
+        self, source_shape: ShapeElement, target_shape: ShapeElement
+    ) -> bool:
+        """Return True when shapes are in the same row (vertical overlap) and one is left/right of the other."""
+        if not source_shape or not target_shape:
+            return False
+        # Vertical overlap: not (source bottom < target top or target bottom < source top)
+        src_bottom = source_shape.y + source_shape.h
+        tgt_bottom = target_shape.y + target_shape.h
+        if source_shape.y >= tgt_bottom or target_shape.y >= src_bottom:
+            return False
+        # One is left of the other (horizontal gap or overlap doesn't matter for "same row")
+        return True
+
     def _ensure_orthogonal_route_respects_ports(
         self,
         pts: List[tuple],
@@ -1083,6 +1097,7 @@ class DrawIOLoader:
         """
         Ensure an orthogonal connector polyline respects the exit/entry side direction.
         When both ends require the same orientation, generate 2 bends (H-V-H or V-H-V).
+        If both directions are the same and the line is already almost straight, keep it straight.
         """
         if not pts or len(pts) != 2:
             return pts
@@ -1093,6 +1108,13 @@ class DrawIOLoader:
         entry_side = self._infer_port_side(entry_x, entry_y)
         start_dir = self._dir_for_port_side(exit_side)
         end_dir = self._dir_for_port_side(entry_side)
+        # Same direction: use a single straight segment (horizontal or vertical) instead of adding bends.
+        if start_dir == "h" and end_dir == "h":
+            mid_y = (sy + ty) / 2.0
+            return [(sx, mid_y), (tx, mid_y)]
+        if start_dir == "v" and end_dir == "v":
+            mid_x = (sx + tx) / 2.0
+            return [(mid_x, sy), (mid_x, ty)]
         if start_dir is None or end_dir is None:
             dx_ = abs(tx - sx)
             dy_ = abs(ty - sy)
@@ -1272,12 +1294,17 @@ class DrawIOLoader:
                 auto_exit_x, auto_exit_y, auto_entry_x, auto_entry_y = self._auto_determine_ports(
                     source_shape, target_shape, points_for_ports
                 )
-                # Elbow (org-chart style): connect from source bottom center to target top center
-                # so lines don't cross and draw.io's generic sourcePoint/targetPoint are ignored.
+                # Elbow (org-chart style): when no waypoints, use bottom→top center so lines don't cross.
+                # If shapes are horizontally aligned (same row), use horizontal ports for a straight line.
                 if is_elbow_edge and exit_x_val is None and exit_y_val is None and entry_x_val is None and entry_y_val is None:
-                    exit_x_val, exit_y_val = 0.5, 1.0   # bottom center
-                    entry_x_val, entry_y_val = 0.5, 0.0  # top center
-                    used_elbow_ports = True
+                    if self._are_shapes_horizontally_aligned(source_shape, target_shape):
+                        exit_x_val, exit_y_val = auto_exit_x, auto_exit_y
+                        entry_x_val, entry_y_val = auto_entry_x, auto_entry_y
+                        used_elbow_ports = False
+                    else:
+                        exit_x_val, exit_y_val = 0.5, 1.0   # bottom center
+                        entry_x_val, entry_y_val = 0.5, 0.0  # top center
+                        used_elbow_ports = True
                 if exit_x_val is None and hint_exit_x is not None:
                     exit_x_val = hint_exit_x
                 if exit_y_val is None and hint_exit_y is not None:

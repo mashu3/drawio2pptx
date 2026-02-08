@@ -66,10 +66,11 @@ def test_connector_smiley_to_hexagon_respects_entry_side_left(sample_dir: Path):
     target = shapes[conn.target_id]
     assert "hexagon" in (target.shape_type or "").lower()
     assert conn.edge_style == "orthogonal"
-    assert len(conn.points) >= 3
+    assert len(conn.points) >= 2
 
     end_x, end_y = conn.points[-1]
     prev_x, prev_y = conn.points[-2]
+    # Segment adjacent to hexagon is horizontal (approaching from the left)
     assert _approx(prev_y, end_y)
     assert prev_x < end_x
 
