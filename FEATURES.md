@@ -2,6 +2,8 @@
 
 This document provides a detailed checklist of implemented and planned features for drawio2pptx.
 
+*Last verified against code: v0.0.6 (2025-02-08).*
+
 ## Core Features
 
 ### File Operations
@@ -123,12 +125,12 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Other Properties
 
-- [ ] Rotation (rotation)
+- [x] Rotation (rotation)
 - [ ] Skew (skew)
 - [ ] Transform matrix (transform)
 - [x] Corner radius (rounded / arcSize)
 - [x] White space handling (whiteSpace: wrap, nowrap)
-- [ ] Aspect ratio (aspect: fixed, variable)
+- [x] Aspect ratio (aspect: fixed for Square/Circle)
 - [ ] Auto-size (autosize)
 - [ ] Resizable flag (resizable)
 - [ ] Movable flag (movable)
@@ -214,14 +216,14 @@ This document provides a detailed checklist of implemented and planned features 
 - [x] Smiley (smiley / mxgraph.basic.smiley)
 - [ ] Cross (CROSS / cross)
 - [ ] Plus (PLUS / plus)
-- [ ] Arrow (ARROW / arrow)
+- [x] Arrow (ARROW / arrow) — vertex shape (mxgraph.arrows2.arrow → right_arrow)
 - [ ] Double arrow (doubleArrow)
 - [ ] Curved arrow (curvedArrow)
 
 ### 3D Shapes
 
 - [x] Cylinder (CYLINDER / cylinder / cylinder3)
-- [ ] Cube (CUBE / cube)
+- [x] Cube (CUBE / cube) — mxgraph.infographic.shadedcube with 3D rotation
 - [ ] 3D Box (box3d)
 
 ### Special Shapes
@@ -249,7 +251,7 @@ This document provides a detailed checklist of implemented and planned features 
 - [ ] Manual operation (manualOperation)
 - [ ] Preparation (preparation)
 - [ ] Connector (connector)
-- [ ] Off-page connector (offPageConnector)
+- [x] Off-page connector (offPageConnector)
 - [ ] Card (card)
 - [x] Punched tape (punchedTape / tape)
 - [ ] Summing junction (summingJunction)
@@ -289,7 +291,7 @@ This document provides a detailed checklist of implemented and planned features 
   - [x] Arrow size (startSize/endSize) mapped to PowerPoint sm/med/lg
   - [x] Default end arrow when mxGraphModel arrows=1 and endArrow omitted (classic)
   - [x] Arrow type mapping (triangle, oval, diamond, open, stealth, etc.)
-- [ ] Labeled connectors
+- [x] Labeled connectors (labels rendered as standalone text elements; z-order preserved)
 
 ### Other Shapes
 
@@ -319,10 +321,10 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Transformation & Rotation
 
-- [ ] Rotation (rotation)
+- [x] Rotation (rotation)
 - [ ] Skew (skew)
 - [ ] Transformation (transform)
-- [ ] Flip (horizontal/vertical flip)
+- [x] Flip (horizontal/vertical flip)
 
 ### Links & Hyperlinks
 
