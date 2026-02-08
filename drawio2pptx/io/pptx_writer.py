@@ -18,7 +18,7 @@ from ..mapping.shape_map import map_shape_type_to_pptx
 from ..mapping.style_map import map_arrow_type, map_arrow_type_with_size, map_dash_pattern
 from ..logger import ConversionLogger
 from ..fonts import replace_font, DRAWIO_DEFAULT_FONT_FAMILY
-from ..config import PARALLELOGRAM_SKEW, ConversionConfig, default_config
+from ..config import PARALLELOGRAM_SKEW, SWIMLANE_DEFAULT_PADDING_PX, ConversionConfig, default_config
 
 # XML namespaces
 NS_DRAWINGML = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -205,6 +205,7 @@ class PPTXWriter:
                 margin_overrides_px=margin_overrides,
                 text_direction=text_direction,
                 clip_overflow=bool(getattr(shape.style, "clip_text", False)),
+                shape_height_px=shape.h,
             )
         
         self._apply_shape_fill(shp, shape)
@@ -259,6 +260,7 @@ class PPTXWriter:
             margin_overrides_px=margin_overrides,
             text_direction=text_direction,
             clip_overflow=bool(getattr(shape.style, "clip_text", False)),
+            shape_height_px=shape.h,
         )
 
         return tb
@@ -391,10 +393,16 @@ class PPTXWriter:
             if start_size <= 0 or not shape.text:
                 return None, None
             first_para = shape.text[0]
-            base_top = first_para.spacing_top or 0.0
-            base_left = first_para.spacing_left or 0.0
-            base_bottom = first_para.spacing_bottom or 0.0
-            base_right = first_para.spacing_right or 0.0
+            base_top = first_para.spacing_top if first_para.spacing_top is not None else 0.0
+            base_left = first_para.spacing_left if first_para.spacing_left is not None else 0.0
+            base_bottom = first_para.spacing_bottom if first_para.spacing_bottom is not None else 0.0
+            base_right = first_para.spacing_right if first_para.spacing_right is not None else 0.0
+            # Apply default inner padding for header when draw.io did not specify spacing (box looks flush otherwise)
+            pad = SWIMLANE_DEFAULT_PADDING_PX
+            if base_top == 0 and base_left == 0 and base_right == 0:
+                base_top = pad
+                base_left = pad
+                base_right = pad
             if getattr(shape.style, "swimlane_horizontal", False):
                 margin_overrides = (
                     base_top,
@@ -1367,6 +1375,10 @@ class PPTXWriter:
                 if default_highlight_color is not None:
                     self._set_highlight_color_xml(run, default_highlight_color)
 
+    # Height (px) below which a shape is treated as a "row cell" (e.g. class diagram row).
+    # For such cells, verticalAlign=top is overridden to middle so text is vertically centered.
+    _ROW_CELL_HEIGHT_THRESHOLD_PX = 40.0
+
     def _set_text_frame(
         self,
         text_frame,
@@ -1376,6 +1388,7 @@ class PPTXWriter:
         margin_overrides_px: Optional[Tuple[float, float, float, float]] = None,
         text_direction: Optional[str] = None,
         clip_overflow: bool = False,
+        shape_height_px: Optional[float] = None,
     ):
         """Set text frame"""
         if not paragraphs:
@@ -1430,6 +1443,13 @@ class PPTXWriter:
             "bottom": (MSO_ANCHOR.BOTTOM, 'b'),
         }
         vertical_align = first_para.vertical_align or "middle"
+        # For short row cells (e.g. class diagram rows), use middle so text is vertically centered
+        if (
+            shape_height_px is not None
+            and shape_height_px <= self._ROW_CELL_HEIGHT_THRESHOLD_PX
+            and vertical_align == "top"
+        ):
+            vertical_align = "middle"
         saved_vertical_anchor, anchor_value = VERTICAL_ALIGN_MAP.get(
             vertical_align, (MSO_ANCHOR.MIDDLE, 'ctr')
         )

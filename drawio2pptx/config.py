@@ -15,6 +15,10 @@ PT_PER_PX = 0.75  # Assumption: for 96 DPI
 # Used when converting draw.io → PPTX to match shape appearance with connection point calculation.
 PARALLELOGRAM_SKEW: float = 0.2
 
+# Default inner padding (px) for swimlane/container shapes when draw.io does not specify spacing.
+# Applied to header (title) area so box content is not flush to edges.
+SWIMLANE_DEFAULT_PADDING_PX: float = 4.0
+
 
 @dataclass
 class ConversionConfig:
