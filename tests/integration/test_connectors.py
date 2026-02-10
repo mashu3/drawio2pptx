@@ -108,7 +108,7 @@ def test_generated_pptx_contains_triangle_arrow_type_for_default_end_arrow(
         slide_xml = z.read("ppt/slides/slide1.xml").decode("utf-8", errors="ignore")
 
     assert 'type="stealth"' in slide_xml
-    # draw.io endArrow (矢先) → OOXML tailEnd (line end)
+    # draw.io endArrow (arrowhead) → OOXML tailEnd (line end)
     assert '<a:tailEnd' in slide_xml and 'type="stealth"' in slide_xml
 
 

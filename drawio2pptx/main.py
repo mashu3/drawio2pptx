@@ -17,19 +17,19 @@ from drawio2pptx.config import ConversionConfig, default_config
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(
-        description='draw.ioファイルをPowerPointプレゼンテーションに変換',
+        description='Convert draw.io files to PowerPoint presentations',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-例:
+Examples:
   drawio2pptx input.drawio output.pptx
   drawio2pptx input.drawio output.pptx --analyze
   drawio2pptx input.drawio output.pptx -a
         """
     )
-    parser.add_argument('input', type=str, help='入力draw.ioファイルのパス')
-    parser.add_argument('output', type=str, help='出力PowerPointファイルのパス')
+    parser.add_argument('input', type=str, help='Path to input draw.io file')
+    parser.add_argument('output', type=str, help='Path to output PowerPoint file')
     parser.add_argument('-a', '--analyze', action='store_true',
-                       help='変換後に解析結果を表示')
+                       help='Display analysis results after conversion')
     
     args = parser.parse_args()
     

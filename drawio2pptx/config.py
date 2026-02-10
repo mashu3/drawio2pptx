@@ -68,7 +68,7 @@ DASH_PATTERN_MAP: Dict[str, str] = {
 
 # Arrow type mapping (draw.io → PowerPoint)
 ARROW_TYPE_MAP: Dict[str, Tuple[str, str, str]] = {
-    # (type, w, len) format. stealth = ブロック型の矢印
+    # (type, w, len) format. stealth = block arrow
     'classic': ('stealth', 'med', 'med'),
     'block': ('stealth', 'med', 'med'),
     'classicthin': ('stealth', 'sm', 'sm'),

@@ -29,6 +29,8 @@ classifiers = [
 dependencies = [
     "python-pptx>=0.6.21",
     "lxml>=4.6.0",
+    "resvg>=0.1.2",
+    "affine>=2.0.0",
 ]
 
 [project.optional-dependencies]

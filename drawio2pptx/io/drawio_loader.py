@@ -13,11 +13,47 @@ from pptx.dml.color import RGBColor  # type: ignore[import]
 
 from ..model.intermediate import (
     ShapeElement, ConnectorElement, BaseElement, TextElement, PolygonElement,
-    Transform, Style, TextParagraph, TextRun
+    Transform, Style, TextParagraph, TextRun, ImageData
 )
 from ..logger import ConversionLogger
 from ..fonts import DRAWIO_DEFAULT_FONT_FAMILY
 from ..config import PARALLELOGRAM_SKEW, ConversionConfig, default_config
+
+# Built-in images for special shapes (keys should be lowercase to match extract_shape_type output)
+BUILTIN_IMAGES: Dict[str, str] = {
+    'mxgraph.mscae.cloud.power_bi_embedded': 'power_bi_embedded.png',
+}
+
+
+def normalize_image_path(image_path: str) -> str:
+    """
+    Normalize image path: convert relative paths to full URLs
+    
+    Args:
+        image_path: Image path (relative or absolute URL)
+    
+    Returns:
+        Normalized image path (full URL if relative, unchanged if already absolute)
+    """
+    if not image_path:
+        return image_path
+    
+    # If already a full URL (http:// or https://), return as-is
+    if image_path.startswith(('http://', 'https://')):
+        return image_path
+    
+    # If it's a data URI, return as-is
+    if image_path.startswith('data:'):
+        return image_path
+    
+    # If it's a relative path starting with img/, convert to diagrams.net URL
+    if image_path.startswith('img/'):
+        return f'https://app.diagrams.net/{image_path}'
+    
+    # Otherwise, assume it's a relative path and prepend diagrams.net base URL
+    # Remove leading slash if present
+    normalized_path = image_path.lstrip('/')
+    return f'https://app.diagrams.net/{normalized_path}'
 
 
 class ColorParser:
@@ -130,7 +166,7 @@ class StyleExtractor:
         'mxgraph.arrows2.arrow': 'right_arrow',
         # diagrams.net "Stylised Arrow" is closer to PPTX's notched block arrow than a plain right arrow.
         'mxgraph.arrows2.stylisedarrow': 'notched_right_arrow',
-        # mxgraph.infographic: 3D shaded cube -> PowerPoint 3D box (直方体)
+        # mxgraph.infographic: 3D shaded cube -> PowerPoint 3D box (cuboid)
         'mxgraph.infographic.shadedcube': 'cube',
     }
     
@@ -799,6 +835,37 @@ class DrawIOLoader:
         ws = white_space.lower().strip()
         return ws == "wrap"
 
+    def _extract_image_data(self, style_str: str) -> Optional[ImageData]:
+        """
+        Extract image data from style string
+        
+        Args:
+            style_str: Style string from draw.io cell
+        
+        Returns:
+            ImageData object if image is found, None otherwise
+        """
+        if not style_str:
+            return None
+        
+        # Extract image attribute from style
+        image_path = self.style_extractor.extract_style_value(style_str, "image")
+        if not image_path:
+            return None
+        
+        # Normalize image path (convert relative paths to full URLs)
+        normalized_path = normalize_image_path(image_path)
+        
+        if self.logger:
+            self.logger.debug(f"Extracted image path: {image_path} -> normalized: {normalized_path}")
+        
+        # Check if it's a data URI
+        if normalized_path.startswith('data:'):
+            return ImageData(data_uri=normalized_path)
+        
+        # Otherwise, it's a file path (URL)
+        return ImageData(file_path=normalized_path)
+
     def _build_style_for_shape_cell(
         self, cell: ET.Element, mgm_root: ET.Element, w: float, h: float, word_wrap: bool
     ) -> Style:
@@ -912,6 +979,21 @@ class DrawIOLoader:
                     self.logger.debug(f"Failed to apply nowrap heuristic: {e}")
 
         style = self._build_style_for_shape_cell(cell, mgm_root, w, h, word_wrap)
+        
+        # Extract image data
+        image_data = self._extract_image_data(style_str)
+        
+        # Check if shape type has a built-in image
+        if not image_data and shape_type in BUILTIN_IMAGES:
+            builtin_image_file = BUILTIN_IMAGES[shape_type]
+            # Get the path to the built-in image
+            media_dir = Path(__file__).parent.parent / 'media'
+            builtin_image_path = media_dir / builtin_image_file
+            if builtin_image_path.exists():
+                image_data = ImageData(file_path=str(builtin_image_path))
+                if self.logger:
+                    self.logger.debug(f"Using built-in image for shape type {shape_type}: {builtin_image_path}")
+        
         shape = ShapeElement(
             id=shape_id,
             x=x,
@@ -923,6 +1005,7 @@ class DrawIOLoader:
             style=style,
             transform=transform,
             z_index=0,
+            image=image_data,
         )
         return shape
 
@@ -986,6 +1069,22 @@ class DrawIOLoader:
         geo = cell.find(".//mxGeometry")
         if geo is None:
             return (points_raw, source_point, target_point, points_for_ports)
+        
+        # First, parse sourcePoint and targetPoint (these can exist alongside Array[@as="points"])
+        for point_elem in geo.findall("./mxPoint"):
+            role = (point_elem.attrib.get("as") or "").strip()
+            if role == "sourcePoint":
+                px = float(point_elem.attrib.get("x", "0") or 0)
+                py = float(point_elem.attrib.get("y", "0") or 0)
+                source_point = (px, py)
+                continue
+            if role == "targetPoint":
+                px = float(point_elem.attrib.get("x", "0") or 0)
+                py = float(point_elem.attrib.get("y", "0") or 0)
+                target_point = (px, py)
+                continue
+        
+        # Then parse waypoints (Array[@as="points"] or individual mxPoint elements)
         array_elem = geo.find('./Array[@as="points"]')
         if array_elem is not None:
             for point_elem in array_elem.findall("./mxPoint"):
@@ -997,17 +1096,7 @@ class DrawIOLoader:
         else:
             for point_elem in geo.findall("./mxPoint"):
                 role = (point_elem.attrib.get("as") or "").strip()
-                if role == "sourcePoint":
-                    px = float(point_elem.attrib.get("x", "0") or 0)
-                    py = float(point_elem.attrib.get("y", "0") or 0)
-                    source_point = (px, py)
-                    continue
-                if role == "targetPoint":
-                    px = float(point_elem.attrib.get("x", "0") or 0)
-                    py = float(point_elem.attrib.get("y", "0") or 0)
-                    target_point = (px, py)
-                    continue
-                if role == "offset":
+                if role in ("sourcePoint", "targetPoint", "offset"):
                     continue
                 px = float(point_elem.attrib.get("x", "0") or 0)
                 py = float(point_elem.attrib.get("y", "0") or 0)
@@ -1359,7 +1448,7 @@ class DrawIOLoader:
                     points = [(source_x, source_y), (target_x, target_y)]
                 else:
                     # Elbow with waypoints: go straight down from source, then through waypoints,
-                    # then straight down into target top center (same as 1段目).
+                    # then straight down into target top center (same as first segment).
                     if used_elbow_ports:
                         first_wp_y = filtered[0][1]
                         last_wp_y = filtered[-1][1]
@@ -1383,6 +1472,36 @@ class DrawIOLoader:
                     self.logger.debug(f"Failed to ensure orthogonal route respects ports: {e}")
         return points
 
+    def _find_shape_at_point(self, point: tuple, shapes_dict: Dict[str, ShapeElement], tolerance: float = 20.0) -> Optional[str]:
+        """
+        Find the shape ID that contains or is closest to the given point.
+        Returns the shape ID if found within tolerance, None otherwise.
+        """
+        if not point or len(point) < 2:
+            return None
+        px, py = point[0], point[1]
+        best_shape_id = None
+        min_distance = float('inf')
+        
+        for shape_id, shape in shapes_dict.items():
+            # Check if point is inside shape bounds (with tolerance)
+            shape_left = shape.x - tolerance
+            shape_right = shape.x + shape.w + tolerance
+            shape_top = shape.y - tolerance
+            shape_bottom = shape.y + shape.h + tolerance
+            
+            if shape_left <= px <= shape_right and shape_top <= py <= shape_bottom:
+                # Point is within shape bounds (with tolerance)
+                # Calculate distance to shape center
+                center_x = shape.x + shape.w / 2.0
+                center_y = shape.y + shape.h / 2.0
+                distance = ((px - center_x) ** 2 + (py - center_y) ** 2) ** 0.5
+                if distance < min_distance:
+                    min_distance = distance
+                    best_shape_id = shape_id
+        
+        return best_shape_id
+
     def _extract_connector(self, cell: ET.Element, mgm_root: ET.Element, shapes_dict: Dict[str, ShapeElement]) -> tuple[Optional[ConnectorElement], List[TextElement]]:
         """Extract connector and its labels (if present)"""
         source_id = cell.attrib.get("source")
@@ -1397,6 +1516,21 @@ class DrawIOLoader:
         edge_style, is_elbow_edge = self._parse_connector_edge_style(style_str)
         style = self._build_connector_style(cell, mgm_root, style_str)
         points_raw, source_point, target_point, points_for_ports = self._parse_connector_geometry(cell, mgm_root)
+
+        # If target is missing but target_point exists, try to infer target from point coordinates
+        # Check both None and empty string cases
+        if not target_shape and target_point and (target_id is None or target_id == ""):
+            inferred_target_id = self._find_shape_at_point(target_point, shapes_dict, tolerance=30.0)
+            if inferred_target_id:
+                target_id = inferred_target_id
+                target_shape = shapes_dict.get(target_id)
+        
+        # Similarly, if source is missing but source_point exists, try to infer source from point coordinates
+        if not source_shape and source_point and (source_id is None or source_id == ""):
+            inferred_source_id = self._find_shape_at_point(source_point, shapes_dict, tolerance=30.0)
+            if inferred_source_id:
+                source_id = inferred_source_id
+                source_shape = shapes_dict.get(source_id)
 
         # Floating edges (no source/target shapes) are stored with sourcePoint/targetPoint.
         # Preserve their geometry and arrow styles even without bound shapes.

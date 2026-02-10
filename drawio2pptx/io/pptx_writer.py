@@ -10,8 +10,12 @@ from pptx.util import Emu, Pt  # type: ignore[import]
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR  # type: ignore[import]
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR  # type: ignore[import]
 from pptx.dml.color import RGBColor  # type: ignore[import]
+import urllib.request
+import base64
+import io
 
-from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun
+from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun, ImageData
+from ..media.image_utils import extract_data_uri_image, svg_bytes_to_png, extract_svg_dimensions
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
@@ -187,11 +191,15 @@ class PPTXWriter:
             shape_is_flipped = False
 
         # When verticalLabelPosition=bottom, label is rendered below the shape (see _add_shape_label_below).
+        # For image shapes, text should always be below the image (y-axis direction), not inside the shape.
         # Do not set text inside the shape in that case.
         label_below = (
-            getattr(shape.style, "vertical_label_position", None) == "bottom"
-            and shape.text
+            shape.text
             and not shape_is_flipped
+            and (
+                getattr(shape.style, "vertical_label_position", None) == "bottom"
+                or shape.image  # For image shapes, always place text below the image
+            )
         )
 
         # Set text (inside the shape when not flipped and not label-below)
@@ -208,13 +216,39 @@ class PPTXWriter:
                 shape_height_px=shape.h,
             )
         
-        self._apply_shape_fill(shp, shape)
-        stroke_color = self._apply_shape_stroke(shp, shape)
+        # If shape has an image, make the shape completely invisible (no fill, no stroke)
+        # The image will be added as a separate picture shape below
+        if shape.image:
+            # Make shape completely transparent (no fill)
+            try:
+                shp.fill.background()
+            except Exception:
+                pass
+            # Remove stroke completely (no border)
+            try:
+                self._set_no_line_xml(shp)
+            except Exception:
+                try:
+                    shp.line.fill.background()
+                except Exception:
+                    pass
+            stroke_color = None
+        else:
+            self._apply_shape_fill(shp, shape)
+            stroke_color = self._apply_shape_stroke(shp, shape)
+        
         self._maybe_add_swimlane_divider(slide, shape, stroke_color)
         self._apply_shape_shadow(shp, shape.style.has_shadow)
 
         self._maybe_add_cube_3d(shp, shape)
         self._maybe_add_bpmn_symbol(slide, shape)
+        
+        # Add image if present (as separate picture shape)
+        if shape.image:
+            self._safe_try(lambda: self._add_shape_image(slide, shape), "add shape image")
+        
+        # Add label below image if verticalLabelPosition=bottom or if shape has an image
+        # For image shapes, text is always placed below the image (y-axis direction)
         if label_below:
             self._safe_try(lambda: self._add_shape_label_below(slide, shape), "add shape label below")
         if shape.text and shape_is_flipped:
@@ -273,14 +307,27 @@ class PPTXWriter:
         gap_px = 4.0
         label_y = shape.y + shape.h + gap_px
 
-        # Estimate label height from first paragraph font size
+        # Estimate label height from actual text content and font size
+        # Count lines across all paragraphs
+        lines: List[str] = []
         font_size_px = 12.0
-        if shape.text:
-            for run in shape.text[0].runs:
-                if run.font_size is not None:
-                    font_size_px = float(run.font_size)
-                    break
-        label_h_px = max(20.0, font_size_px * 1.5)
+        for para in shape.text:
+            text = "".join(run.text for run in para.runs if run.text)
+            if text:
+                lines.extend(text.splitlines() or [text])
+            # Get font size from first run found
+            if font_size_px == 12.0:  # Still default
+                for run in para.runs:
+                    if run.font_size is not None:
+                        font_size_px = float(run.font_size)
+                        break
+
+        if not lines:
+            lines = [""]
+
+        # Calculate height based on number of lines and font size
+        # Use similar logic to _estimate_text_box_size: line_height = font_size * 1.4
+        label_h_px = max(len(lines) * float(font_size_px) * 1.4, float(font_size_px) * 1.2)
 
         left = px_to_emu(shape.x)
         top = px_to_emu(label_y)
@@ -332,7 +379,7 @@ class PPTXWriter:
         try:
             if not getattr(shape.style, "is_swimlane", False):
                 return
-            # スイムレーンが strokeColor=none のときは区切り線を描かない（存在しない黒線を出さない）
+            # Don't draw divider line when swimlane has strokeColor=none (to avoid drawing non-existent black line)
             if stroke_color is None:
                 return
             start_size = float(getattr(shape.style, "swimlane_start_size", 0.0) or 0.0)
@@ -2084,7 +2131,7 @@ class PPTXWriter:
     def _set_cube_3d_rotation_xml(self, shape):
         """Apply 3D scene (camera + lightRig) and ratio adjustment to cube shape.
         - scene3d: isometricLeftDown + threePt light so the box looks tilted.
-        - prstGeom adj=51666: makes the top face closer to a square (from reference timeline4のコピー.pptx).
+        - prstGeom adj=51666: makes the top face closer to a square (from reference timeline4_copy.pptx).
         """
         try:
             if not hasattr(shape, '_element'):
@@ -2126,3 +2173,167 @@ class PPTXWriter:
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"Failed to set cube 3D rotation XML: {e}")
+
+    def _add_shape_image(self, slide, shape: ShapeElement):
+        """
+        Add image as a separate picture shape (not as shape fill)
+        
+        Args:
+            slide: PowerPoint slide
+            shape: ShapeElement with image data
+        """
+        if not shape.image:
+            if self.logger:
+                self.logger.debug("No image data in shape")
+            return
+        
+        image_data = shape.image
+        if self.logger:
+            self.logger.debug(f"Processing image: data_uri={image_data.data_uri is not None}, file_path={image_data.file_path}")
+        
+        image_bytes = None
+        
+        # Extract image data from data URI or download from URL
+        if image_data.data_uri:
+            image_bytes = extract_data_uri_image(image_data.data_uri)
+            if self.logger:
+                self.logger.debug(f"Extracted image from data URI, size: {len(image_bytes) if image_bytes else 0} bytes")
+        elif image_data.file_path:
+            # Check if it's a local file path or URL
+            if image_data.file_path.startswith(('http://', 'https://')):
+                # Download image from URL
+                try:
+                    if self.logger:
+                        self.logger.debug(f"Downloading image from: {image_data.file_path}")
+                    req = urllib.request.Request(
+                        image_data.file_path,
+                        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        image_bytes = response.read()
+                    if self.logger:
+                        self.logger.debug(f"Downloaded image, size: {len(image_bytes)} bytes")
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"Failed to download image from {image_data.file_path}: {e}")
+                    # Also print to stderr for debugging
+                    import sys
+                    print(f"ERROR: Failed to download image from {image_data.file_path}: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    return
+            else:
+                # Read from local file
+                try:
+                    from pathlib import Path
+                    image_path = Path(image_data.file_path)
+                    if image_path.exists():
+                        with open(image_path, 'rb') as f:
+                            image_bytes = f.read()
+                        if self.logger:
+                            self.logger.debug(f"Read image from local file: {image_path}, size: {len(image_bytes)} bytes")
+                    else:
+                        if self.logger:
+                            self.logger.warning(f"Image file not found: {image_path}")
+                        return
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"Failed to read image from local file {image_data.file_path}: {e}")
+                    return
+        
+        if not image_bytes:
+            if self.logger:
+                self.logger.warning("No image bytes available")
+            return
+        
+        # Convert SVG to PNG if needed (PowerPoint doesn't support SVG directly)
+        # Check if the image is SVG by file extension or content
+        is_svg = False
+        if image_data.file_path and image_data.file_path.lower().endswith('.svg'):
+            is_svg = True
+        elif image_data.data_uri and 'svg' in image_data.data_uri.lower():
+            is_svg = True
+        elif image_bytes.startswith(b'<svg') or image_bytes.startswith(b'<?xml'):
+            # Check content for SVG
+            try:
+                if b'<svg' in image_bytes[:1000]:  # Check first 1KB
+                    is_svg = True
+            except Exception:
+                pass
+        
+        if is_svg:
+            if self.logger:
+                self.logger.debug("Converting SVG to PNG")
+            # Calculate target dimensions for higher quality conversion
+            left, top, width, height = self._compute_shape_geometry(shape)
+            # Convert EMU to pixels (EMU / 9525 = pixels at 96 DPI)
+            target_width_px = int(width / 9525) if width else None
+            target_height_px = int(height / 9525) if height else None
+            # Save original SVG bytes for debug information
+            original_svg_bytes = image_bytes
+            try:
+                image_bytes = svg_bytes_to_png(image_bytes, target_width_px, target_height_px)
+                if not image_bytes:
+                    if self.logger:
+                        self.logger.warning("Failed to convert SVG to PNG, skipping image")
+                    return
+                if self.logger:
+                    # Add debug information
+                    svg_width, svg_height = extract_svg_dimensions(original_svg_bytes)
+                    size_info = f"SVG size: {svg_width}x{svg_height}" if svg_width and svg_height else "SVG size: unknown"
+                    target_info = f"Target: {target_width_px}x{target_height_px}" if target_width_px and target_height_px else "Target: unknown"
+                    self.logger.debug(f"Successfully converted SVG to PNG ({size_info}, {target_info}), output size: {len(image_bytes)} bytes")
+            except ImportError:
+                if self.logger:
+                    self.logger.error(
+                        "SVG to PNG conversion requires resvg and affine. "
+                        "Install with: pip install resvg affine"
+                    )
+                raise
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Failed to convert SVG to PNG: {e}")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
+                return
+        
+        # Add image as a separate picture shape
+        try:
+            left, top, width, height = self._compute_shape_geometry(shape)
+            
+            # For image shapes, text is always placed below the image (y-axis direction)
+            # The image uses the full shape area, and text will be added separately below
+            
+            # Create BytesIO object and ensure it's at the beginning
+            image_stream = io.BytesIO(image_bytes)
+            image_stream.seek(0)  # Reset stream position to beginning (required for add_picture)
+            
+            picture = slide.shapes.add_picture(
+                image_stream,
+                left, top, width, height
+            )
+            self._set_shape_name(picture, f"drawio2pptx:shape-image:{shape.id}" if shape.id else None)
+            
+            # Remove border from picture (no outline around image)
+            try:
+                picture.line.fill.background()
+            except Exception:
+                pass
+            
+            # Apply transform if needed
+            if shape.transform.rotation:
+                picture.rotation = shape.transform.rotation
+            
+            if self.logger:
+                self.logger.debug(f"Successfully added image as picture shape at ({left}, {top}), size ({width}, {height})")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Failed to add image as picture shape: {e}")
+                import traceback
+                self.logger.debug(traceback.format_exc())
+            # Also print to stderr for debugging
+            import sys
+            print(f"ERROR: Failed to add image: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+    
