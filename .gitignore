@@ -21,3 +21,8 @@ sample/*.pptx
 
 # OS
 .DS_Store
+
+# Packaging / build artifacts
+dist/
+build/
+*.egg-info/
