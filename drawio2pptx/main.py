@@ -43,7 +43,7 @@ Examples:
     print(f"Parsing: {input_path}")
     
     try:
-        # Create conversion configuration (default: 192 DPI for 2x resolution, auto-calculated for minimum 100px short edge)
+        # Create conversion configuration (default: 192 DPI, auto-calculated for minimum 100px short edge)
         config = ConversionConfig()
         
         # Create logger with config
