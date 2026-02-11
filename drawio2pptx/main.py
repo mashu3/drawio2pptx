@@ -9,9 +9,9 @@ from pathlib import Path
 
 from drawio2pptx.io.drawio_loader import DrawIOLoader
 from drawio2pptx.io.pptx_writer import PPTXWriter
-from drawio2pptx.logger import get_logger, ConversionLogger
+from drawio2pptx.logger import ConversionLogger
 from drawio2pptx.analysis import compare_conversion
-from drawio2pptx.config import ConversionConfig, default_config
+from drawio2pptx.config import ConversionConfig
 
 
 def main():
@@ -43,8 +43,8 @@ Examples:
     print(f"Parsing: {input_path}")
     
     try:
-        # Create conversion configuration
-        config = ConversionConfig()  # Use default settings
+        # Create conversion configuration (default: 192 DPI for 2x resolution, auto-calculated for minimum 100px short edge)
+        config = ConversionConfig()
         
         # Create logger with config
         logger = ConversionLogger(config=config)

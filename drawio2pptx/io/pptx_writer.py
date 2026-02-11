@@ -15,7 +15,7 @@ import base64
 import io
 
 from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun, ImageData
-from ..media.image_utils import extract_data_uri_image, svg_bytes_to_png, extract_svg_dimensions
+from ..media.image_utils import extract_data_uri_image, svg_bytes_to_png, calculate_optimal_dpi, extract_svg_dimensions
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
@@ -2269,10 +2269,22 @@ class PPTXWriter:
             # Convert EMU to pixels (EMU / 9525 = pixels at 96 DPI)
             target_width_px = int(width / 9525) if width else None
             target_height_px = int(height / 9525) if height else None
+            
             # Save original SVG bytes for debug information
             original_svg_bytes = image_bytes
+            
             try:
-                image_bytes = svg_bytes_to_png(image_bytes, target_width_px, target_height_px)
+                # Get base DPI from config
+                base_dpi = self.config.dpi if hasattr(self.config, 'dpi') else 192.0
+                
+                # Calculate optimal DPI (ensures minimum 100px short edge)
+                dpi = calculate_optimal_dpi(original_svg_bytes, base_dpi=base_dpi)
+                
+                if self.logger:
+                    source = "data URI" if image_data.data_uri else (image_data.file_path or "unknown")
+                    self.logger.debug(f"SVG from {source}, calculated optimal DPI: {dpi:.1f}")
+                
+                image_bytes = svg_bytes_to_png(original_svg_bytes, target_width_px, target_height_px, dpi=dpi)
                 if not image_bytes:
                     if self.logger:
                         self.logger.warning("Failed to convert SVG to PNG, skipping image")
@@ -2282,7 +2294,7 @@ class PPTXWriter:
                     svg_width, svg_height = extract_svg_dimensions(original_svg_bytes)
                     size_info = f"SVG size: {svg_width}x{svg_height}" if svg_width and svg_height else "SVG size: unknown"
                     target_info = f"Target: {target_width_px}x{target_height_px}" if target_width_px and target_height_px else "Target: unknown"
-                    self.logger.debug(f"Successfully converted SVG to PNG ({size_info}, {target_info}), output size: {len(image_bytes)} bytes")
+                    self.logger.debug(f"Successfully converted SVG to PNG (DPI: {dpi:.1f}, {size_info}, {target_info}), output size: {len(image_bytes)} bytes")
             except ImportError:
                 if self.logger:
                     self.logger.error(

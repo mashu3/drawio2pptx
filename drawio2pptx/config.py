@@ -30,8 +30,8 @@ class ConversionConfig:
     margin_x: float = 0.0
     margin_y: float = 0.0
     
-    # DPI setting
-    dpi: float = 96.0
+    # DPI setting (default 192 for 2x resolution)
+    dpi: float = 192.0
     
     # Font replacement map
     font_replacements: Dict[str, str] = None

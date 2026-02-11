@@ -2,7 +2,7 @@
 
 import pytest
 import base64
-from drawio2pptx.media.image_utils import extract_data_uri_image, svg_to_png, save_image_to_media
+from drawio2pptx.media.image_utils import extract_data_uri_image, svg_to_png
 
 
 def test_extract_data_uri_image_base64():
@@ -46,8 +46,3 @@ def test_svg_to_png():
     assert result is None
 
 
-def test_save_image_to_media():
-    """Test save_image_to_media function (not implemented yet)"""
-    from pathlib import Path
-    result = save_image_to_media(b"test", Path("/tmp"), "test.png")
-    assert result is None
