@@ -33,6 +33,7 @@ drawio2pptx is a Python package that converts draw.io (diagrams.net) files to Po
 - **Special**: Cloud, Swimlane (horizontal/vertical with header), BPMN (rhombus / parallel gateway)
 - **Flowchart**: Process, Decision, Data, Document, Predefined Process, Internal Storage, Punched Tape, Stored Data, Manual Input, Extract, Merge
 - **Connectors**: Straight and orthogonal (elbow) lines; connection points (exit/entry); line styles (dashed, dotted, etc.); arrows (type, size, fill; open oval supported)
+- **Images**: SVG image support — SVG images are automatically converted to PNG format and embedded in PowerPoint presentations with high-quality rendering (configurable DPI, default 192 DPI)
 
 ### 🎨 Styling & Formatting
 - **Colors**: Hex (#RRGGBB, #RGB), RGB, light-dark format
@@ -54,11 +55,13 @@ This project is in **alpha** and under active development. For a detailed checkl
 - Python 3.8 or higher
 - **python-pptx >= 0.6.21**: Used for creating and writing PowerPoint (.pptx) files in PresentationML format
 - **lxml >= 4.6.0**: Used for parsing and processing XML/mxGraph data from draw.io files, and for directly editing PresentationML XML elements that are not supported by python-pptx (e.g., gradients, highlights, advanced styling)
+- **resvg >= 0.1.2**: Used for converting SVG images to PNG format for embedding in PowerPoint presentations
+- **affine >= 2.0.0**: Used for geometric transformations when converting SVG images
 
 ### Install Dependencies
 
 ```bash
-pip install python-pptx lxml
+pip install python-pptx lxml resvg affine
 ```
 
 ### Install as Package (Development Mode)

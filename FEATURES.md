@@ -2,8 +2,6 @@
 
 This document provides a detailed checklist of implemented and planned features for drawio2pptx.
 
-*Last verified against code: v0.0.6 (2025-02-08).*
-
 ## Core Features
 
 ### File Operations
@@ -349,10 +347,14 @@ This document provides a detailed checklist of implemented and planned features 
 
 ### Images & Media
 
-- [ ] Image embedding (image) — intermediate model and media utils exist; ImageElement not yet written to PPTX
-- [ ] Image size adjustment
-- [ ] Image aspect ratio maintenance
-- [ ] SVG image support
+- [x] Image embedding (image) — ImageElement written to PPTX
+- [x] SVG image support — SVG images are automatically converted to PNG format for embedding
+  - [x] SVG to PNG conversion using resvg library
+  - [x] High-quality rendering with configurable DPI (default 192 DPI)
+  - [x] Optimal DPI calculation to ensure minimum 100px short edge
+  - [x] Support for SVG images from data URIs and file paths
+- [x] Image size adjustment — images maintain their size from draw.io
+- [x] Image aspect ratio maintenance — aspect ratio preserved during conversion
 
 ### Other
 
