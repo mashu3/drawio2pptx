@@ -1197,24 +1197,22 @@ class DrawIOLoader:
         entry_side = self._infer_port_side(entry_x, entry_y)
         start_dir = self._dir_for_port_side(exit_side)
         end_dir = self._dir_for_port_side(entry_side)
-        # Same direction: use a single straight segment (horizontal or vertical) instead of adding bends.
-        if start_dir == "h" and end_dir == "h":
-            mid_y = (sy + ty) / 2.0
-            return [(sx, mid_y), (tx, mid_y)]
-        if start_dir == "v" and end_dir == "v":
-            mid_x = (sx + tx) / 2.0
-            return [(mid_x, sy), (mid_x, ty)]
         if start_dir is None or end_dir is None:
             dx_ = abs(tx - sx)
             dy_ = abs(ty - sy)
             if dx_ >= dy_:
+                # Start/end sides are ambiguous: prefer horizontal–then–vertical route.
                 return [(sx, sy), (tx, sy), (tx, ty)]
+            # Prefer vertical–then–horizontal route.
             return [(sx, sy), (sx, ty), (tx, ty)]
         if start_dir == "h" and end_dir == "v":
+            # Left/right → top/bottom: horizontal–then–vertical.
             return [(sx, sy), (tx, sy), (tx, ty)]
         if start_dir == "v" and end_dir == "h":
+            # Top/bottom → left/right: vertical–then–horizontal.
             return [(sx, sy), (sx, ty), (tx, ty)]
         if start_dir == "h" and end_dir == "h":
+            # Both ends want horizontal exit/entry: use H–V–H with snapped middle X.
             x_mid = self._snap_to_grid((sx + tx) / 2.0, grid_size)
             if x_mid == sx:
                 x_mid = self._snap_to_grid(sx + (grid_size or 10.0), grid_size)
@@ -1222,6 +1220,7 @@ class DrawIOLoader:
                 x_mid = self._snap_to_grid(tx - (grid_size or 10.0), grid_size)
             return [(sx, sy), (x_mid, sy), (x_mid, ty), (tx, ty)]
         if start_dir == "v" and end_dir == "v":
+            # Both ends want vertical exit/entry: use V–H–V with snapped middle Y.
             y_mid = self._snap_to_grid((sy + ty) / 2.0, grid_size)
             if y_mid == sy:
                 y_mid = self._snap_to_grid(sy + (grid_size or 10.0), grid_size)
@@ -1447,18 +1446,30 @@ class DrawIOLoader:
                 if not filtered:
                     points = [(source_x, source_y), (target_x, target_y)]
                 else:
-                    # Elbow with waypoints: go straight down from source, then through waypoints,
-                    # then straight down into target top center (same as first segment).
                     if used_elbow_ports:
-                        first_wp_y = filtered[0][1]
-                        last_wp_y = filtered[-1][1]
-                        points = [
-                            (source_x, source_y),
-                            (source_x, first_wp_y),
-                        ] + list(filtered) + [
-                            (target_x, last_wp_y),
-                            (target_x, target_y),
-                        ]
+                        # For elbow/org-chart style with ports, prefer a single-bend L-shape
+                        # between source and target (horizontal then vertical or vertical then
+                        # horizontal), instead of reproducing all waypoints from draw.io.
+                        #
+                        # This matches typical diagram expectations such as:
+                        #   - first go right (or left) from the source
+                        #   - then bend once and go up/down into the target.
+                        #
+                        # Decide orientation:
+                        # - If target is mostly to the left/right of source (common case),
+                        #   use H→V: (sx, sy) -> (tx, sy) -> (tx, ty)
+                        # - If target is mostly above/below but almost same X,
+                        #   use V→H: (sx, sy) -> (sx, ty) -> (tx, ty)
+                        dx_c = abs(target_x - source_x)
+                        dy_c = abs(target_y - source_y)
+                        if dx_c >= dy_c:
+                            # Horizontal first, then vertical (one visible bend).
+                            mid = (target_x, source_y)
+                            points = [(source_x, source_y), mid, (target_x, target_y)]
+                        else:
+                            # Vertical first, then horizontal (one visible bend).
+                            mid = (source_x, target_y)
+                            points = [(source_x, source_y), mid, (target_x, target_y)]
                     else:
                         points = [(source_x, source_y)] + list(filtered) + [(target_x, target_y)]
 
