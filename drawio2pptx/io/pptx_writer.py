@@ -53,6 +53,7 @@ class PPTXWriter:
         """
         self.config = config or default_config
         self.logger = logger
+        self._svg_backend_logged = False
 
     def _set_shape_name(self, shape_obj, name: Optional[str]) -> None:
         """Set debug name on a shape/connector/textbox; log on failure."""
@@ -417,6 +418,14 @@ class PPTXWriter:
             except Exception as e:
                 if self.logger:
                     self.logger.debug(f"Failed to set stroke width: {e}")
+        # Apply dash pattern for vertex shapes (e.g. dashed containers/boundaries)
+        dash_pattern = getattr(shape.style, "dash", None)
+        if dash_pattern:
+            try:
+                self._set_dash_pattern_xml(shp, dash_pattern)
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"Failed to set shape dash pattern: {e}")
         return stroke_color
 
     def _apply_shape_shadow(self, shp, has_shadow: bool) -> None:
@@ -2264,6 +2273,10 @@ class PPTXWriter:
         if is_svg:
             if self.logger:
                 self.logger.debug("Converting SVG to PNG")
+                if not getattr(self, '_svg_backend_logged', False):
+                    backend = getattr(self.config, 'svg_backend', 'cairosvg')
+                    self.logger.info(f"SVG to PNG: using {backend}")
+                    self._svg_backend_logged = True
             # Calculate target dimensions for higher quality conversion
             left, top, width, height = self._compute_shape_geometry(shape)
             # Convert EMU to pixels (EMU / 9525 = pixels at 96 DPI)
@@ -2298,8 +2311,9 @@ class PPTXWriter:
             except ImportError:
                 if self.logger:
                     self.logger.error(
-                        "SVG to PNG conversion requires resvg and affine. "
-                        "Install with: pip install resvg affine"
+                        "SVG to PNG conversion requires cairosvg (default) or resvg. "
+                        "Install cairosvg: pip install cairosvg. "
+                        "Or use resvg: pip install resvg affine and set config.svg_backend = 'resvg'."
                     )
                 raise
             except Exception as e:

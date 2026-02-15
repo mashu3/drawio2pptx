@@ -551,12 +551,27 @@ class DrawIOLoader:
                 children_by_parent.setdefault(parent_id, []).append(cid)
         parent_ids = {cell.attrib.get("parent") for cell in cells if cell.attrib.get("parent") and cell.attrib.get("parent") not in ("0", "1")}
         container_vertex_ids: set = set()
+        # 1) Structural containers: cells that are parents of other vertex/edge cells.
         for pid in parent_ids:
             pcell = cell_by_id.get(pid)
             if pcell is None:
                 continue
             if pcell.attrib.get("vertex") == "1" and pcell.attrib.get("edge") != "1":
                 container_vertex_ids.add(pid)
+        # 2) Style-based containers: vertex cells with style container=1 (e.g. dashed boundary boxes
+        #    that visually act as containers but may not be XML parents of their contents).
+        for cell in cells:
+            cid = cell.attrib.get("id")
+            if not cid or cid in container_vertex_ids:
+                continue
+            if cell.attrib.get("vertex") == "1" and cell.attrib.get("edge") != "1":
+                style_str = cell.attrib.get("style", "")
+                try:
+                    container_flag = self.style_extractor.extract_style_value(style_str, "container")
+                except Exception:
+                    container_flag = None
+                if container_flag and container_flag.strip() == "1":
+                    container_vertex_ids.add(cid)
         draw_order_ids: List[str] = []
         visited: set[str] = set()
 
@@ -915,12 +930,22 @@ class DrawIOLoader:
         if vlp_str:
             vertical_label_position = vlp_str.strip().lower()
 
+        # Extract dashed style for vertex shapes (e.g. containers/boundaries).
+        # draw.io style key "dashed":
+        #   - "1" / "true" → standard dashed line
+        #   - other values (e.g. "dash", "dotted", "dashDot") → named dash pattern
+        dash_pattern = None
+        dashed_value = self.style_extractor.extract_style_value(style_str, "dashed")
+        if dashed_value:
+            dash_pattern = "dashed" if dashed_value in ("1", "true") else dashed_value
+
         style = Style(
             fill=fill_color,
             gradient_color=gradient_color,
             gradient_direction=gradient_direction,
             stroke=stroke_color,
             stroke_width=stroke_width,
+            dash=dash_pattern,
             opacity=1.0,
             corner_radius=corner_radius,
             label_background_color=label_bg_color,

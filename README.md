@@ -55,13 +55,19 @@ This project is in **alpha** and under active development. For a detailed checkl
 - Python 3.8 or higher
 - **python-pptx >= 0.6.21**: Used for creating and writing PowerPoint (.pptx) files in PresentationML format
 - **lxml >= 4.6.0**: Used for parsing and processing XML/mxGraph data from draw.io files, and for directly editing PresentationML XML elements that are not supported by python-pptx (e.g., gradients, highlights, advanced styling)
-- **resvg >= 0.1.2**: Used for converting SVG images to PNG format for embedding in PowerPoint presentations
-- **affine >= 2.0.0**: Used for geometric transformations when converting SVG images
+- **cairosvg >= 2.7.0** (default): Used for converting SVG images to PNG for embedding in PowerPoint. Optional: **resvg** and **affine** — set `config.svg_backend = 'resvg'` and install with `pip install drawio2pptx[resvg]` to use resvg instead.
 
 ### Install Dependencies
 
 ```bash
-pip install python-pptx lxml resvg affine
+pip install python-pptx lxml cairosvg
+```
+
+To use resvg as the SVG backend instead of cairosvg:
+
+```bash
+pip install drawio2pptx[resvg]
+# and in code: default_config.svg_backend = 'resvg'
 ```
 
 ### Install as Package (Development Mode)

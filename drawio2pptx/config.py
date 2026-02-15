@@ -33,6 +33,10 @@ class ConversionConfig:
     # DPI setting (default 192)
     dpi: float = 192.0
     
+    # SVG to PNG backend: 'cairosvg' (default) or 'resvg'
+    # cairosvg is LGPL; use as library only (no modification).
+    svg_backend: str = 'cairosvg'
+    
     # Font replacement map
     font_replacements: Dict[str, str] = None
     

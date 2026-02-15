@@ -349,7 +349,7 @@ This document provides a detailed checklist of implemented and planned features 
 
 - [x] Image embedding (image) — ImageElement written to PPTX
 - [x] SVG image support — SVG images are automatically converted to PNG format for embedding
-  - [x] SVG to PNG conversion using resvg library
+  - [x] SVG to PNG conversion: cairosvg (default) or resvg (optional)
   - [x] High-quality rendering with configurable DPI (default 192 DPI)
   - [x] Optimal DPI calculation to ensure minimum 100px short edge
   - [x] Support for SVG images from data URIs and file paths

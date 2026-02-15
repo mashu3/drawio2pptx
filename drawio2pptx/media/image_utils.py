@@ -1,7 +1,8 @@
 """
 Image processing module
 
-SVG → PNG rasterization, image extraction from data URIs, and DPI calculation
+SVG → PNG rasterization (cairosvg default, resvg optional), image extraction from data URIs, and DPI calculation.
+CairoSVG is LGPL; used as library only (no modification).
 """
 from typing import Optional, Tuple
 from pathlib import Path
@@ -9,165 +10,169 @@ import re
 from ..config import default_config
 
 
+def _svg_to_png_cairosvg(svg_data: str, dpi: float) -> Optional[bytes]:
+    """
+    Rasterize SVG to PNG using cairosvg (LGPL; use as library only, no modification).
+    """
+    import cairosvg
+    # cairosvg.svg2png(bytestring=..., dpi=...) returns bytes when write_to is omitted
+    out = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'), dpi=dpi)
+    return bytes(out) if out else None
+
+
+def _svg_to_png_resvg(svg_data: str, dpi: float) -> Optional[bytes]:
+    """
+    Rasterize SVG to PNG using resvg.
+    resvg's render function scales content using transform matrix, but
+    output size is determined by SVG width/height attributes.
+    To output at 2x resolution, scale SVG size to 2x before rendering.
+    """
+    from resvg import render, usvg
+    import affine
+
+    scale = dpi / 96.0
+
+    if scale != 1.0:
+        def scale_svg_size(match, scale_factor):
+            """Scale SVG width/height attribute values"""
+            attr_name = match.group(1)
+            value = match.group(2)
+            num_match = re.search(r'(\d+(?:\.\d+)?)', value)
+            if num_match:
+                num = float(num_match.group(1))
+                new_num = num * scale_factor
+                unit = value.replace(num_match.group(1), '').strip()
+                return f'{attr_name}="{new_num}{unit}"'
+            return match.group(0)
+
+        svg_data = re.sub(
+            r'(width)=["\']([^"\']+)["\']',
+            lambda m: scale_svg_size(m, scale),
+            svg_data
+        )
+        svg_data = re.sub(
+            r'(height)=["\']([^"\']+)["\']',
+            lambda m: scale_svg_size(m, scale),
+            svg_data
+        )
+
+        viewbox_match = re.search(r'viewBox=["\']([^"\']+)["\']', svg_data)
+        if viewbox_match:
+            viewbox_values = viewbox_match.group(1).split()
+            if len(viewbox_values) >= 4:
+                try:
+                    viewbox_x = float(viewbox_values[0])
+                    viewbox_y = float(viewbox_values[1])
+                    viewbox_width = float(viewbox_values[2])
+                    viewbox_height = float(viewbox_values[3])
+                    scaled_width = viewbox_width * scale
+                    scaled_height = viewbox_height * scale
+                    new_viewbox = f'{viewbox_x} {viewbox_y} {scaled_width} {scaled_height}'
+                    svg_data = re.sub(
+                        r'viewBox=["\'][^"\']+["\']',
+                        f'viewBox="{new_viewbox}"',
+                        svg_data,
+                        count=1
+                    )
+                    svg_data = re.sub(
+                        r'width=["\'][^"\']+["\']',
+                        f'width="{scaled_width}"',
+                        svg_data,
+                        count=1
+                    )
+                    svg_data = re.sub(
+                        r'height=["\'][^"\']+["\']',
+                        f'height="{scaled_height}"',
+                        svg_data,
+                        count=1
+                    )
+                    if not re.search(r'width=["\']', svg_data):
+                        svg_data = re.sub(
+                            r'(<svg[^>]*?)>',
+                            lambda m: f'{m.group(1)} width="{scaled_width}">',
+                            svg_data,
+                            count=1
+                        )
+                    if not re.search(r'height=["\']', svg_data):
+                        svg_data = re.sub(
+                            r'(<svg[^>]*?)>',
+                            lambda m: f'{m.group(1)} height="{scaled_height}">',
+                            svg_data,
+                            count=1
+                        )
+                except (ValueError, IndexError):
+                    pass
+
+    db = usvg.FontDatabase.default()
+    db.load_system_fonts()
+    options = usvg.Options.default()
+    tree = usvg.Tree.from_str(svg_data, options, db)
+    transform = affine.Affine.scale(scale, scale)
+    transform_tuple = transform[0:6]
+    png_data = render(tree, transform_tuple)
+    return bytes(png_data)
+
+
 def svg_to_png(svg_data: str, dpi: float = None) -> Optional[bytes]:
     """
-    Rasterize SVG to PNG using resvg
-    
+    Rasterize SVG to PNG using the configured backend (default: cairosvg).
+
+    Backends:
+        - cairosvg (default): LGPL, used as library only.
+        - resvg: set config.svg_backend = 'resvg' and install resvg, affine.
+
     Args:
         svg_data: SVG data (string)
         dpi: DPI setting (uses default_config.dpi if None, defaults to 192 DPI)
-    
+
     Returns:
-        PNG data (bytes), or None
-    
-    Note:
-        resvg's render function scales content using transform matrix, but
-        output size is determined by SVG width/height attributes.
-        To output at 2x resolution, scale SVG size to 2x before rendering.
+        PNG data (bytes), or None on conversion failure.
+
+    Raises:
+        ImportError: When the selected backend is not installed.
     """
+    if dpi is None:
+        dpi = default_config.dpi if hasattr(default_config, 'dpi') else 192.0
+
+    backend = getattr(default_config, 'svg_backend', 'cairosvg')
     try:
-        from resvg import render, usvg
-        import affine
-        
-        if dpi is None:
-            dpi = default_config.dpi if hasattr(default_config, 'dpi') else 192.0
-        
-        # Calculate scale factor for DPI
-        scale = dpi / 96.0
-        
-        # resvg's render function scales content using transform matrix, but
-        # output size is determined by SVG width/height attributes.
-        # To output at 2x resolution, scale SVG size to 2x before rendering.
-        if scale != 1.0:
-            # Scale SVG width/height attributes
-            def scale_svg_size(match, scale_factor):
-                """Scale SVG width/height attribute values"""
-                attr_name = match.group(1)  # width or height
-                value = match.group(2)
-                # Extract numeric value and scale it
-                num_match = re.search(r'(\d+(?:\.\d+)?)', value)
-                if num_match:
-                    num = float(num_match.group(1))
-                    new_num = num * scale_factor
-                    unit = value.replace(num_match.group(1), '').strip()
-                    return f'{attr_name}="{new_num}{unit}"'
-                return match.group(0)
-            
-            # Scale width attribute (if present)
-            svg_data = re.sub(
-                r'(width)=["\']([^"\']+)["\']',
-                lambda m: scale_svg_size(m, scale),
-                svg_data
-            )
-            # Scale height attribute (if present)
-            svg_data = re.sub(
-                r'(height)=["\']([^"\']+)["\']',
-                lambda m: scale_svg_size(m, scale),
-                svg_data
-            )
-            
-            # Get actual size from viewBox and scale both width/height and viewBox
-            # resvg renders based on viewBox size, so we need to scale viewBox width/height
-            # and set width/height attributes to the same values
-            viewbox_match = re.search(r'viewBox=["\']([^"\']+)["\']', svg_data)
-            if viewbox_match:
-                viewbox_values = viewbox_match.group(1).split()
-                if len(viewbox_values) >= 4:
-                    try:
-                        viewbox_x = float(viewbox_values[0])
-                        viewbox_y = float(viewbox_values[1])
-                        viewbox_width = float(viewbox_values[2])
-                        viewbox_height = float(viewbox_values[3])
-                        
-                        # Scale viewBox size (x, y remain unchanged)
-                        scaled_width = viewbox_width * scale
-                        scaled_height = viewbox_height * scale
-                        
-                        # Update viewBox
-                        new_viewbox = f'{viewbox_x} {viewbox_y} {scaled_width} {scaled_height}'
-                        svg_data = re.sub(
-                            r'viewBox=["\'][^"\']+["\']',
-                            f'viewBox="{new_viewbox}"',
-                            svg_data,
-                            count=1
-                        )
-                        
-                        # Overwrite width/height attributes (replace existing ones)
-                        svg_data = re.sub(
-                            r'width=["\'][^"\']+["\']',
-                            f'width="{scaled_width}"',
-                            svg_data,
-                            count=1
-                        )
-                        svg_data = re.sub(
-                            r'height=["\'][^"\']+["\']',
-                            f'height="{scaled_height}"',
-                            svg_data,
-                            count=1
-                        )
-                        
-                        # Add width/height attributes if they don't exist
-                        if not re.search(r'width=["\']', svg_data):
-                            svg_data = re.sub(
-                                r'(<svg[^>]*?)>',
-                                lambda m: f'{m.group(1)} width="{scaled_width}">',
-                                svg_data,
-                                count=1
-                            )
-                        if not re.search(r'height=["\']', svg_data):
-                            svg_data = re.sub(
-                                r'(<svg[^>]*?)>',
-                                lambda m: f'{m.group(1)} height="{scaled_height}">',
-                                svg_data,
-                                count=1
-                            )
-                    except (ValueError, IndexError):
-                        pass
-        
-        # Set up resvg
-        db = usvg.FontDatabase.default()
-        db.load_system_fonts()
-        
-        options = usvg.Options.default()
-        
-        # Parse SVG
-        tree = usvg.Tree.from_str(svg_data, options, db)
-        
-        # Use scale transform to achieve desired DPI
-        # resvg's render function scales content using transform matrix, but
-        # output size is determined by SVG width/height attributes.
-        # To achieve 2x resolution, scale using transform matrix and also scale SVG size to 2x.
-        transform = affine.Affine.scale(scale, scale)
-        transform_tuple = transform[0:6]
-        
-        # Render to PNG
-        png_data = render(tree, transform_tuple)
-        return bytes(png_data)
-    except ImportError:
-        # Explicitly fail if library is not available
-        raise
+        if backend == 'resvg':
+            return _svg_to_png_resvg(svg_data, dpi)
+        else:
+            return _svg_to_png_cairosvg(svg_data, dpi)
+    except ImportError as e:
+        if backend == 'resvg':
+            raise ImportError(
+                "SVG backend is set to 'resvg' but resvg or affine is not installed. "
+                "Install with: pip install resvg affine"
+            ) from e
+        raise ImportError(
+            "SVG backend is 'cairosvg' (default) but cairosvg is not installed. "
+            "Install with: pip install cairosvg. "
+            "Alternatively use resvg: pip install resvg affine and set config.svg_backend = 'resvg'."
+        ) from e
     except Exception:
         return None
 
 
 def svg_bytes_to_png(svg_bytes: bytes, target_width: Optional[int] = None, target_height: Optional[int] = None, dpi: Optional[float] = None) -> Optional[bytes]:
     """
-    Convert SVG bytes to PNG bytes using resvg (for PowerPoint conversion)
-    
-    This function renders SVG with specified DPI, scaling the SVG size accordingly.
-    Higher DPI results in higher resolution PNG output.
-    
+    Convert SVG bytes to PNG bytes (for PowerPoint conversion).
+
+    Uses the configured SVG backend (default: cairosvg; optional: resvg).
+    Renders SVG with specified DPI; higher DPI gives higher resolution PNG.
+
     Args:
         svg_bytes: SVG image data as bytes
-        target_width: Target width in pixels (optional, currently unused but kept for API compatibility)
-        target_height: Target height in pixels (optional, currently unused but kept for API compatibility)
-        dpi: DPI setting for rendering (uses default_config.dpi if None, defaults to 192 DPI)
-    
+        target_width: Target width in pixels (optional, kept for API compatibility)
+        target_height: Target height in pixels (optional, kept for API compatibility)
+        dpi: DPI for rendering (uses default_config.dpi if None, defaults to 192 DPI)
+
     Returns:
         PNG image data as bytes, or None if conversion fails
-    
+
     Raises:
-        ImportError: If resvg or affine libraries are not available
+        ImportError: If the selected SVG backend (cairosvg or resvg) is not installed
     """
     try:
         # Convert bytes to string
