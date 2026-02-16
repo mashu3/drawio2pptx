@@ -120,6 +120,19 @@ drawio2pptx sample.drawio sample.pptx --analyze
 
 ---
 
+## 🎯 AWS Architecture Icons Support
+
+drawio2pptx supports AWS Architecture Icons for draw.io shapes. When a draw.io file contains AWS icon shapes without embedded image data, drawio2pptx resolves the icons by providing a **mapping dictionary** that references external icon sources.
+
+**Important**: drawio2pptx does **not** redistribute AWS icon images. It only provides a mapping dictionary that references publicly available icon sources. The actual icon images are fetched from the following sources at conversion time:
+
+- **[MKAbuMattar/aws-icons](https://github.com/MKAbuMattar/aws-icons)** — Official AWS Architecture Icons (npm package, CDN)
+- **[weibeld/aws-icons-svg](https://github.com/weibeld/aws-icons-svg)** — AWS Icons SVG (raw GitHub)
+
+**Note**: Icon images are subject to the licenses and terms of their respective sources. drawio2pptx is not affiliated with AWS or any of the icon source repositories.
+
+---
+
 ## 📄 Samples & Demo
 
 - **[Live Demo](https://mashu3.github.io/drawio2pptx/)** — Compare draw.io diagrams and converted PowerPoint side-by-side in the browser (Bar chart, Class diagram, Swimlane, Flowchart, Process bar, etc.).

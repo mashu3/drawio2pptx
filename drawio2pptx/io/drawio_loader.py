@@ -1018,7 +1018,18 @@ class DrawIOLoader:
                 image_data = ImageData(file_path=str(builtin_image_path))
                 if self.logger:
                     self.logger.debug(f"Using built-in image for shape type {shape_type}: {builtin_image_path}")
-        
+
+        # Resolve mxgraph.aws4.* shapes via icon mapping dictionary (MKAbuMattar/aws-icons or weibeld SVG URLs)
+        if not image_data and shape_type and shape_type.startswith("mxgraph.aws4"):
+            try:
+                from ..stencil.aws_icons import get_aws_icon_image_data
+                image_data = get_aws_icon_image_data(shape_type, style_str)
+                if image_data and self.logger:
+                    self.logger.debug(f"Using AWS icon for shape type {shape_type}")
+            except Exception as e:
+                if self.logger:
+                    self.logger.debug(f"AWS icon lookup failed for {shape_type}: {e}")
+
         shape = ShapeElement(
             id=shape_id,
             x=x,

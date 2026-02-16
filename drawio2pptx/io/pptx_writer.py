@@ -10,12 +10,10 @@ from pptx.util import Emu, Pt  # type: ignore[import]
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR  # type: ignore[import]
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR  # type: ignore[import]
 from pptx.dml.color import RGBColor  # type: ignore[import]
-import urllib.request
-import base64
 import io
 
 from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun, ImageData
-from ..media.image_utils import extract_data_uri_image, svg_bytes_to_png, calculate_optimal_dpi, extract_svg_dimensions
+from ..media.image_utils import prepare_image_for_pptx
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
@@ -2198,134 +2196,43 @@ class PPTXWriter:
         
         image_data = shape.image
         if self.logger:
-            self.logger.debug(f"Processing image: data_uri={image_data.data_uri is not None}, file_path={image_data.file_path}")
-        
-        image_bytes = None
-        
-        # Extract image data from data URI or download from URL
-        if image_data.data_uri:
-            image_bytes = extract_data_uri_image(image_data.data_uri)
-            if self.logger:
-                self.logger.debug(f"Extracted image from data URI, size: {len(image_bytes) if image_bytes else 0} bytes")
-        elif image_data.file_path:
-            # Check if it's a local file path or URL
-            if image_data.file_path.startswith(('http://', 'https://')):
-                # Download image from URL
-                try:
-                    if self.logger:
-                        self.logger.debug(f"Downloading image from: {image_data.file_path}")
-                    req = urllib.request.Request(
-                        image_data.file_path,
-                        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                    )
-                    with urllib.request.urlopen(req, timeout=10) as response:
-                        image_bytes = response.read()
-                    if self.logger:
-                        self.logger.debug(f"Downloaded image, size: {len(image_bytes)} bytes")
-                except Exception as e:
-                    if self.logger:
-                        self.logger.warning(f"Failed to download image from {image_data.file_path}: {e}")
-                    # Also print to stderr for debugging
-                    import sys
-                    print(f"ERROR: Failed to download image from {image_data.file_path}: {e}", file=sys.stderr)
-                    import traceback
-                    traceback.print_exc(file=sys.stderr)
-                    return
-            else:
-                # Read from local file
-                try:
-                    from pathlib import Path
-                    image_path = Path(image_data.file_path)
-                    if image_path.exists():
-                        with open(image_path, 'rb') as f:
-                            image_bytes = f.read()
-                        if self.logger:
-                            self.logger.debug(f"Read image from local file: {image_path}, size: {len(image_bytes)} bytes")
-                    else:
-                        if self.logger:
-                            self.logger.warning(f"Image file not found: {image_path}")
-                        return
-                except Exception as e:
-                    if self.logger:
-                        self.logger.warning(f"Failed to read image from local file {image_data.file_path}: {e}")
-                    return
-        
+            self.logger.debug(
+                f"Processing image: data_uri={image_data.data_uri is not None}, file_path={image_data.file_path}"
+            )
+
+        left, top, width, height = self._compute_shape_geometry(shape)
+        target_width_px = int(width / 9525) if width else None
+        target_height_px = int(height / 9525) if height else None
+
+        image_bytes, img_width_px, img_height_px, is_svg = prepare_image_for_pptx(
+            data_uri=image_data.data_uri,
+            file_path=image_data.file_path,
+            shape_type=shape.shape_type,
+            target_width_px=target_width_px,
+            target_height_px=target_height_px,
+            base_dpi=self.config.dpi if hasattr(self.config, "dpi") else 192.0,
+        )
+
         if not image_bytes:
             if self.logger:
-                self.logger.warning("No image bytes available")
+                self.logger.warning("No image bytes available after preparation")
             return
-        
-        # Convert SVG to PNG if needed (PowerPoint doesn't support SVG directly)
-        # Check if the image is SVG by file extension or content
-        is_svg = False
-        if image_data.file_path and image_data.file_path.lower().endswith('.svg'):
-            is_svg = True
-        elif image_data.data_uri and 'svg' in image_data.data_uri.lower():
-            is_svg = True
-        elif image_bytes.startswith(b'<svg') or image_bytes.startswith(b'<?xml'):
-            # Check content for SVG
-            try:
-                if b'<svg' in image_bytes[:1000]:  # Check first 1KB
-                    is_svg = True
-            except Exception:
-                pass
-        
-        if is_svg:
-            if self.logger:
-                self.logger.debug("Converting SVG to PNG")
-                if not getattr(self, '_svg_backend_logged', False):
-                    backend = getattr(self.config, 'svg_backend', 'cairosvg')
-                    self.logger.info(f"SVG to PNG: using {backend}")
-                    self._svg_backend_logged = True
-            # Calculate target dimensions for higher quality conversion
-            left, top, width, height = self._compute_shape_geometry(shape)
-            # Convert EMU to pixels (EMU / 9525 = pixels at 96 DPI)
-            target_width_px = int(width / 9525) if width else None
-            target_height_px = int(height / 9525) if height else None
-            
-            # Save original SVG bytes for debug information
-            original_svg_bytes = image_bytes
-            
-            try:
-                # Get base DPI from config
-                base_dpi = self.config.dpi if hasattr(self.config, 'dpi') else 192.0
-                
-                # Calculate optimal DPI (ensures minimum 100px short edge)
-                dpi = calculate_optimal_dpi(original_svg_bytes, base_dpi=base_dpi)
-                
-                if self.logger:
-                    source = "data URI" if image_data.data_uri else (image_data.file_path or "unknown")
-                    self.logger.debug(f"SVG from {source}, calculated optimal DPI: {dpi:.1f}")
-                
-                image_bytes = svg_bytes_to_png(original_svg_bytes, target_width_px, target_height_px, dpi=dpi)
-                if not image_bytes:
-                    if self.logger:
-                        self.logger.warning("Failed to convert SVG to PNG, skipping image")
-                    return
-                if self.logger:
-                    # Add debug information
-                    svg_width, svg_height = extract_svg_dimensions(original_svg_bytes)
-                    size_info = f"SVG size: {svg_width}x{svg_height}" if svg_width and svg_height else "SVG size: unknown"
-                    target_info = f"Target: {target_width_px}x{target_height_px}" if target_width_px and target_height_px else "Target: unknown"
-                    self.logger.debug(f"Successfully converted SVG to PNG (DPI: {dpi:.1f}, {size_info}, {target_info}), output size: {len(image_bytes)} bytes")
-            except ImportError:
-                if self.logger:
-                    self.logger.error(
-                        "SVG to PNG conversion requires cairosvg (default) or resvg. "
-                        "Install cairosvg: pip install cairosvg. "
-                        "Or use resvg: pip install resvg affine and set config.svg_backend = 'resvg'."
-                    )
-                raise
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(f"Failed to convert SVG to PNG: {e}")
-                    import traceback
-                    self.logger.debug(traceback.format_exc())
-                return
+
+        if is_svg and self.logger and not getattr(self, "_svg_backend_logged", False):
+            backend = getattr(self.config, "svg_backend", "cairosvg")
+            self.logger.info(f"SVG to PNG: using {backend}")
+            self._svg_backend_logged = True
         
         # Add image as a separate picture shape
         try:
-            left, top, width, height = self._compute_shape_geometry(shape)
+            if img_width_px and img_height_px and img_width_px > 0 and img_height_px > 0:
+                img_aspect = img_width_px / img_height_px
+                original_height = height
+                new_height = int(width / img_aspect)
+                if new_height > 0:
+                    height = new_height
+                    if height != original_height:
+                        top += int((original_height - height) / 2)
             
             # For image shapes, text is always placed below the image (y-axis direction)
             # The image uses the full shape area, and text will be added separately below

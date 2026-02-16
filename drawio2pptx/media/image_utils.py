@@ -5,18 +5,35 @@ SVG → PNG rasterization (cairosvg default, resvg optional), image extraction f
 CairoSVG is LGPL; used as library only (no modification).
 """
 from typing import Optional, Tuple
-from pathlib import Path
 import re
+import io
+import urllib.request
 from ..config import default_config
 
 
-def _svg_to_png_cairosvg(svg_data: str, dpi: float) -> Optional[bytes]:
+def _svg_to_png_cairosvg(svg_data: str, dpi: float, output_width: Optional[int] = None, output_height: Optional[int] = None) -> Optional[bytes]:
     """
     Rasterize SVG to PNG using cairosvg (LGPL; use as library only, no modification).
+    
+    Args:
+        svg_data: SVG data as string
+        dpi: DPI setting (affects how SVG units are interpreted)
+        output_width: Output width in pixels (scaled by DPI if provided)
+        output_height: Output height in pixels (scaled by DPI if provided)
     """
     import cairosvg
-    # cairosvg.svg2png(bytestring=..., dpi=...) returns bytes when write_to is omitted
-    out = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'), dpi=dpi)
+    # Scale output dimensions by DPI ratio (96 DPI is baseline)
+    # This ensures high-resolution output
+    scale = dpi / 96.0
+    kwargs = {'dpi': dpi}
+    
+    if output_width is not None:
+        kwargs['output_width'] = int(output_width * scale)
+    if output_height is not None:
+        kwargs['output_height'] = int(output_height * scale)
+    
+    # cairosvg.svg2png(bytestring=..., dpi=..., output_width=..., output_height=...) returns bytes when write_to is omitted
+    out = cairosvg.svg2png(bytestring=svg_data.encode('utf-8'), **kwargs)
     return bytes(out) if out else None
 
 
@@ -113,7 +130,7 @@ def _svg_to_png_resvg(svg_data: str, dpi: float) -> Optional[bytes]:
     return bytes(png_data)
 
 
-def svg_to_png(svg_data: str, dpi: float = None) -> Optional[bytes]:
+def svg_to_png(svg_data: str, dpi: float = None, output_width: Optional[int] = None, output_height: Optional[int] = None) -> Optional[bytes]:
     """
     Rasterize SVG to PNG using the configured backend (default: cairosvg).
 
@@ -124,6 +141,8 @@ def svg_to_png(svg_data: str, dpi: float = None) -> Optional[bytes]:
     Args:
         svg_data: SVG data (string)
         dpi: DPI setting (uses default_config.dpi if None, defaults to 192 DPI)
+        output_width: Output width in pixels (optional, scaled by DPI for high resolution)
+        output_height: Output height in pixels (optional, scaled by DPI for high resolution)
 
     Returns:
         PNG data (bytes), or None on conversion failure.
@@ -139,7 +158,7 @@ def svg_to_png(svg_data: str, dpi: float = None) -> Optional[bytes]:
         if backend == 'resvg':
             return _svg_to_png_resvg(svg_data, dpi)
         else:
-            return _svg_to_png_cairosvg(svg_data, dpi)
+            return _svg_to_png_cairosvg(svg_data, dpi, output_width, output_height)
     except ImportError as e:
         if backend == 'resvg':
             raise ImportError(
@@ -161,11 +180,12 @@ def svg_bytes_to_png(svg_bytes: bytes, target_width: Optional[int] = None, targe
 
     Uses the configured SVG backend (default: cairosvg; optional: resvg).
     Renders SVG with specified DPI; higher DPI gives higher resolution PNG.
+    For cairosvg, output_width and output_height are scaled by DPI for high resolution.
 
     Args:
         svg_bytes: SVG image data as bytes
-        target_width: Target width in pixels (optional, kept for API compatibility)
-        target_height: Target height in pixels (optional, kept for API compatibility)
+        target_width: Target width in pixels (optional, scaled by DPI for high resolution)
+        target_height: Target height in pixels (optional, scaled by DPI for high resolution)
         dpi: DPI for rendering (uses default_config.dpi if None, defaults to 192 DPI)
 
     Returns:
@@ -182,7 +202,7 @@ def svg_bytes_to_png(svg_bytes: bytes, target_width: Optional[int] = None, targe
         if dpi is None:
             dpi = default_config.dpi if hasattr(default_config, 'dpi') else 192.0
         
-        return svg_to_png(svg_str, dpi=dpi)
+        return svg_to_png(svg_str, dpi=dpi, output_width=target_width, output_height=target_height)
     except ImportError:
         # Explicitly fail if library is not available
         raise
@@ -342,5 +362,122 @@ def extract_data_uri_image(data_uri: str) -> Optional[bytes]:
             return decoded_url if isinstance(decoded_url, bytes) else decoded_url.encode('utf-8')
     except Exception:
         return None
+
+
+def load_image_bytes(data_uri: Optional[str] = None, file_path: Optional[str] = None) -> Optional[bytes]:
+    """
+    Load image bytes from data URI, HTTP(S) URL, or local file path.
+    """
+    if data_uri:
+        return extract_data_uri_image(data_uri)
+
+    if not file_path:
+        return None
+
+    try:
+        if file_path.startswith(("http://", "https://")):
+            req = urllib.request.Request(
+                file_path,
+                headers={"User-Agent": "drawio2pptx/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return response.read()
+
+        with open(file_path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def is_svg_image(image_bytes: bytes, data_uri: Optional[str] = None, file_path: Optional[str] = None) -> bool:
+    """
+    Detect whether image bytes/source represent an SVG image.
+    """
+    if file_path and file_path.lower().endswith(".svg"):
+        return True
+    if data_uri and "svg" in data_uri.lower():
+        return True
+    if image_bytes.startswith(b"<svg") or image_bytes.startswith(b"<?xml"):
+        return b"<svg" in image_bytes[:1000]
+    return False
+
+
+def trim_transparent_padding(image_bytes: bytes) -> bytes:
+    """
+    Trim transparent outer padding from a raster image.
+    Returns original bytes if trimming is not possible.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        bbox = img.getchannel("A").getbbox()
+        if not bbox:
+            return image_bytes
+
+        full_bbox = (0, 0, img.width, img.height)
+        if bbox == full_bbox:
+            return image_bytes
+
+        cropped = img.crop(bbox)
+        out = io.BytesIO()
+        cropped.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def get_image_size(image_bytes: bytes) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Get raster image dimensions (width, height) in pixels.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        return int(img.width), int(img.height)
+    except Exception:
+        return None, None
+
+
+def prepare_image_for_pptx(
+    *,
+    data_uri: Optional[str] = None,
+    file_path: Optional[str] = None,
+    shape_type: Optional[str] = None,
+    target_width_px: Optional[int] = None,
+    target_height_px: Optional[int] = None,
+    base_dpi: float = 192.0,
+) -> Tuple[Optional[bytes], Optional[int], Optional[int], bool]:
+    """
+    End-to-end image preparation for PPTX placement.
+
+    Steps:
+      1) Load bytes from data URI / URL / local file.
+      2) Convert SVG -> PNG with high-resolution settings.
+      3) Trim transparent outer padding for AWS icons.
+      4) Return final bytes and pixel dimensions.
+    """
+    image_bytes = load_image_bytes(data_uri=data_uri, file_path=file_path)
+    if not image_bytes:
+        return None, None, None, False
+
+    svg = is_svg_image(image_bytes, data_uri=data_uri, file_path=file_path)
+    if svg:
+        dpi = calculate_optimal_dpi(image_bytes, base_dpi=base_dpi)
+        image_bytes = svg_bytes_to_png(
+            image_bytes,
+            target_width=target_width_px,
+            target_height=target_height_px,
+            dpi=dpi,
+        )
+        if not image_bytes:
+            return None, None, None, True
+
+    if shape_type and shape_type.startswith("mxgraph.aws4"):
+        image_bytes = trim_transparent_padding(image_bytes)
+
+    w, h = get_image_size(image_bytes)
+    return image_bytes, w, h, svg
 
 
