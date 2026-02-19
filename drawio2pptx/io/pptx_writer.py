@@ -13,7 +13,7 @@ from pptx.dml.color import RGBColor  # type: ignore[import]
 import io
 
 from ..model.intermediate import BaseElement, ShapeElement, ConnectorElement, TextElement, TextParagraph, TextRun, ImageData
-from ..media.image_utils import prepare_image_for_pptx
+from ..media.image_utils import get_image_size, pad_image_to_square, prepare_image_for_pptx
 from ..geom.units import px_to_emu, px_to_pt, scale_font_size_for_pptx
 from ..geom.transform import split_polyline_to_segments
 from ..mapping.shape_map import map_shape_type_to_pptx
@@ -204,6 +204,20 @@ class PPTXWriter:
         # Set text (inside the shape when not flipped and not label-below)
         if shape.text and not shape_is_flipped and not label_below:
             margin_overrides, text_direction = self._get_swimlane_text_options(shape)
+            if margin_overrides is None and bool(getattr(shape.style, "aws_group_text_padding", False)):
+                # AWS group containers tend to have top-aligned labels; ensure small inner padding
+                # so text does not stick to the border.
+                first_para = shape.text[0] if shape.text else None
+                top_px = float(getattr(first_para, "spacing_top", 0.0) or 0.0)
+                left_px = float(getattr(first_para, "spacing_left", 0.0) or 0.0)
+                bottom_px = float(getattr(first_para, "spacing_bottom", 0.0) or 0.0)
+                right_px = float(getattr(first_para, "spacing_right", 0.0) or 0.0)
+                margin_overrides = (
+                    max(top_px, 6.0),
+                    max(left_px, 8.0),
+                    max(bottom_px, 2.0),
+                    max(right_px, 2.0),
+                )
             self._set_text_frame(
                 shp.text_frame,
                 shape.text,
@@ -245,6 +259,11 @@ class PPTXWriter:
         # Add image if present (as separate picture shape)
         if shape.image:
             self._safe_try(lambda: self._add_shape_image(slide, shape), "add shape image")
+        else:
+            self._safe_try(
+                lambda: self._add_aws_group_icon_overlay(slide, shape),
+                "add aws group icon overlay",
+            )
         
         # Add label below image if verticalLabelPosition=bottom or if shape has an image
         # For image shapes, text is always placed below the image (y-axis direction)
@@ -253,6 +272,74 @@ class PPTXWriter:
         if shape.text and shape_is_flipped:
             self._safe_try(lambda: self._add_shape_text_overlay(slide, shape), "add flipped-shape text overlay")
         return shp
+
+    def _add_aws_group_icon_overlay(self, slide, shape: ShapeElement):
+        """Add a small top-left overlay icon for aws4 group/groupCenter containers."""
+        icon_ref = getattr(shape.style, "aws_group_icon_ref", None)
+        if not icon_ref:
+            return None
+
+        # AWS group icons are square badges attached to container border.
+        icon_size_px = max(14.0, min(24.0, min(float(shape.w), float(shape.h)) * 0.18))
+        icon_key = (getattr(shape.style, "aws_group_icon_key", None) or "").lower()
+        if icon_key == "group_auto_scaling_group":
+            # Special case: auto scaling icon sits on top edge, horizontally centered.
+            left_px = shape.x + max((shape.w - icon_size_px) / 2.0, 0.0)
+            top_px = shape.y
+        else:
+            left_px = shape.x
+            top_px = shape.y
+
+        left = px_to_emu(left_px)
+        top = px_to_emu(top_px)
+        width = px_to_emu(icon_size_px)
+        height = px_to_emu(icon_size_px)
+
+        data_uri = icon_ref if icon_ref.startswith("data:") else None
+        file_path = None if data_uri else icon_ref
+
+        image_bytes, img_width_px, img_height_px, _ = prepare_image_for_pptx(
+            data_uri=data_uri,
+            file_path=file_path,
+            shape_type=shape.shape_type,
+            target_width_px=int(icon_size_px),
+            target_height_px=int(icon_size_px),
+            base_dpi=self.config.dpi if hasattr(self.config, "dpi") else 192.0,
+            aws_icon_color_hex=None,
+        )
+        if not image_bytes:
+            return None
+
+        # Keep original icon aspect and pad to square instead of stretching.
+        padding_color_hex = None
+        stroke = getattr(shape.style, "stroke", None)
+        padding_color_mode = (getattr(shape.style, "aws_group_icon_padding_color_mode", None) or "stroke").lower()
+        if isinstance(stroke, RGBColor) and padding_color_mode != "icon":
+            padding_color_hex = f"{stroke[0]:02X}{stroke[1]:02X}{stroke[2]:02X}"
+        padding_ratio = getattr(shape.style, "aws_group_icon_padding_ratio", None)
+        try:
+            padding_ratio = float(padding_ratio) if padding_ratio is not None else 0.18
+        except (TypeError, ValueError):
+            padding_ratio = 0.18
+        image_bytes = pad_image_to_square(
+            image_bytes,
+            padding_ratio=padding_ratio,
+            padding_color_hex=padding_color_hex,
+        )
+        sq_w, sq_h = get_image_size(image_bytes)
+        if not sq_w or not sq_h:
+            return None
+
+        picture = slide.shapes.add_picture(io.BytesIO(image_bytes), left, top, width, height)
+        self._set_shape_name(
+            picture,
+            f"drawio2pptx:aws-group-icon:{shape.id}" if shape.id else None,
+        )
+        try:
+            picture.line.fill.background()
+        except Exception:
+            pass
+        return picture
 
     def _add_transparent_textbox(self, slide, left_emu, top_emu, width_emu, height_emu, name: Optional[str] = None):
         """Add a textbox with transparent fill and line; return the shape."""
@@ -2203,6 +2290,16 @@ class PPTXWriter:
         left, top, width, height = self._compute_shape_geometry(shape)
         target_width_px = int(width / 9525) if width else None
         target_height_px = int(height / 9525) if height else None
+        aws_icon_color_hex = None
+        try:
+            from ..stencil.aws_icons import is_aws_shape_type
+
+            if is_aws_shape_type(shape.shape_type):
+                fill = getattr(shape.style, "fill", None)
+                if isinstance(fill, RGBColor):
+                    aws_icon_color_hex = f"{fill[0]:02X}{fill[1]:02X}{fill[2]:02X}"
+        except Exception:
+            aws_icon_color_hex = None
 
         image_bytes, img_width_px, img_height_px, is_svg = prepare_image_for_pptx(
             data_uri=image_data.data_uri,
@@ -2211,6 +2308,7 @@ class PPTXWriter:
             target_width_px=target_width_px,
             target_height_px=target_height_px,
             base_dpi=self.config.dpi if hasattr(self.config, "dpi") else 192.0,
+            aws_icon_color_hex=aws_icon_color_hex,
         )
 
         if not image_bytes:

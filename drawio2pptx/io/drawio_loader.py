@@ -1004,6 +1004,7 @@ class DrawIOLoader:
                     self.logger.debug(f"Failed to apply nowrap heuristic: {e}")
 
         style = self._build_style_for_shape_cell(cell, mgm_root, w, h, word_wrap)
+        style.aws_group_text_padding = False
         
         # Extract image data
         image_data = self._extract_image_data(style_str)
@@ -1019,11 +1020,30 @@ class DrawIOLoader:
                 if self.logger:
                     self.logger.debug(f"Using built-in image for shape type {shape_type}: {builtin_image_path}")
 
-        # Resolve mxgraph.aws4.* shapes via icon mapping dictionary (MKAbuMattar/aws-icons or weibeld SVG URLs)
-        if not image_data and shape_type and shape_type.startswith("mxgraph.aws4"):
+        # Resolve group-like padding/overlay metadata (table-driven in stencil/aws_icons.py).
+        if shape_type:
             try:
-                from ..stencil.aws_icons import get_aws_icon_image_data
-                image_data = get_aws_icon_image_data(shape_type, style_str)
+                from ..stencil.aws_icons import resolve_aws_group_metadata
+                group_meta = resolve_aws_group_metadata(shape_type, style_str, text_raw)
+                style.aws_group_text_padding = bool(group_meta.get("apply_text_padding", False))
+                style.aws_group_icon_key = group_meta.get("group_icon_key")
+                style.aws_group_icon_padding_ratio = group_meta.get("group_icon_padding_ratio")
+                style.aws_group_icon_padding_color_mode = group_meta.get("group_icon_padding_color_mode")
+                group_icon = group_meta.get("group_icon_image_data")
+                if group_icon:
+                    style.aws_group_icon_ref = group_icon.data_uri or group_icon.file_path
+            except Exception:
+                pass
+
+        # Resolve mxgraph.aws* shapes via icon mapping dictionary (MKAbuMattar/aws-icons or weibeld SVG URLs)
+        if not image_data and shape_type:
+            try:
+                from ..stencil.aws_icons import (
+                    get_aws_icon_image_data,
+                    is_aws_shape_type,
+                )
+                if is_aws_shape_type(shape_type):
+                    image_data = get_aws_icon_image_data(shape_type, style_str)
                 if image_data and self.logger:
                     self.logger.debug(f"Using AWS icon for shape type {shape_type}")
             except Exception as e:

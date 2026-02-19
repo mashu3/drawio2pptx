@@ -96,6 +96,16 @@ class Style:
     step_size_px: Optional[float] = None
     # draw.io label position: verticalLabelPosition=top/center/bottom. When "bottom", label is drawn below the shape.
     vertical_label_position: Optional[str] = None
+    # AWS group/container overlay icon (for mxgraph.aws4.group* + grIcon).
+    # Stores either an HTTP(S) URL or a data URI.
+    aws_group_icon_ref: Optional[str] = None
+    # Raw AWS group icon key suffix (e.g. "group_auto_scaling_group").
+    aws_group_icon_key: Optional[str] = None
+    # AWS group icon square-padding settings (table-driven from stencil rules).
+    aws_group_icon_padding_ratio: Optional[float] = None
+    aws_group_icon_padding_color_mode: Optional[str] = None
+    # Whether AWS/group-like label padding should be applied.
+    aws_group_text_padding: bool = False
 
 
 @dataclass

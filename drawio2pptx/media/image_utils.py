@@ -402,6 +402,38 @@ def is_svg_image(image_bytes: bytes, data_uri: Optional[str] = None, file_path: 
     return False
 
 
+def recolor_svg_bytes(svg_bytes: bytes, color_hex: str) -> bytes:
+    """
+    Recolor non-white SVG hex colors to the given color.
+
+    This is used for draw.io AWS stencil icons whose line/fill color should follow
+    draw.io style `fillColor` (e.g. blue email icon variants).
+    """
+    try:
+        svg_str = svg_bytes.decode("utf-8")
+    except Exception:
+        return svg_bytes
+
+    target = color_hex.strip().lstrip("#").upper()
+    if not re.fullmatch(r"[0-9A-F]{6}", target):
+        return svg_bytes
+
+    white_like = {"#FFF", "#FFFFFF", "#FFFFFE", "#FEFFFF"}
+
+    def _replace_hex(match: re.Match) -> str:
+        token = match.group(0)
+        upper = token.upper()
+        if upper in white_like:
+            return token
+        return f"#{target}"
+
+    recolored = re.sub(r"#[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?\b", _replace_hex, svg_str)
+    try:
+        return recolored.encode("utf-8")
+    except Exception:
+        return svg_bytes
+
+
 def trim_transparent_padding(image_bytes: bytes) -> bytes:
     """
     Trim transparent outer padding from a raster image.
@@ -422,6 +454,157 @@ def trim_transparent_padding(image_bytes: bytes) -> bytes:
         cropped = img.crop(bbox)
         out = io.BytesIO()
         cropped.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def trim_solid_background_padding(image_bytes: bytes, tolerance: int = 6) -> bytes:
+    """
+    Trim outer padding filled with a nearly uniform corner color.
+    Used for SVGs that are opaque (no alpha padding) but contain centered glyphs.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        width, height = img.width, img.height
+        if width <= 2 or height <= 2:
+            return image_bytes
+
+        corners = [
+            img.getpixel((0, 0)),
+            img.getpixel((width - 1, 0)),
+            img.getpixel((0, height - 1)),
+            img.getpixel((width - 1, height - 1)),
+        ]
+        bg = max(set(corners), key=corners.count)
+
+        def is_bg(px) -> bool:
+            return (
+                abs(px[0] - bg[0]) <= tolerance
+                and abs(px[1] - bg[1]) <= tolerance
+                and abs(px[2] - bg[2]) <= tolerance
+                and abs(px[3] - bg[3]) <= tolerance
+            )
+
+        pixels = img.load()
+        min_x, min_y = width, height
+        max_x, max_y = -1, -1
+
+        for y in range(height):
+            for x in range(width):
+                if not is_bg(pixels[x, y]):
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+
+        if max_x < min_x or max_y < min_y:
+            return image_bytes
+
+        bbox = (min_x, min_y, max_x + 1, max_y + 1)
+        full_bbox = (0, 0, width, height)
+        if bbox == full_bbox:
+            return image_bytes
+
+        cropped = img.crop(bbox)
+        out = io.BytesIO()
+        cropped.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def pad_image_to_square(
+    image_bytes: bytes,
+    padding_ratio: float = 0.0,
+    padding_color_hex: Optional[str] = None,
+) -> bytes:
+    """
+    Pad a raster image to a square canvas without distorting the glyph.
+
+    Padding color is chosen from corner pixels so it blends with the icon's
+    existing background tone.
+
+    Args:
+        image_bytes: PNG/JPEG bytes
+        padding_ratio: Extra margin ratio around the icon (e.g. 0.15 => +15% on each side)
+        padding_color_hex: Optional hex color (RRGGBB or #RRGGBB) for padding fill.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        w, h = img.width, img.height
+        if w <= 0 or h <= 0:
+            return image_bytes
+
+        fill = None
+        if padding_color_hex:
+            raw = padding_color_hex.strip().lstrip("#")
+            if re.fullmatch(r"[0-9A-Fa-f]{6}", raw):
+                fill = (
+                    int(raw[0:2], 16),
+                    int(raw[2:4], 16),
+                    int(raw[4:6], 16),
+                    255,
+                )
+        if fill is None:
+            # Prefer a representative non-white icon color (white borders are common in AWS icons).
+            pixels = img.load()
+            step = max(1, min(w, h) // 64)
+            bins = {}
+            for y in range(0, h, step):
+                for x in range(0, w, step):
+                    r, g, b, a = pixels[x, y]
+                    if a < 32:
+                        continue
+                    # Exclude near-white pixels (e.g. icon border/highlight).
+                    if r >= 242 and g >= 242 and b >= 242:
+                        continue
+                    key = (r // 16, g // 16, b // 16)
+                    bins[key] = bins.get(key, 0) + 1
+
+            if bins:
+                k = max(bins, key=bins.get)
+                fill = (
+                    int(k[0] * 16 + 8),
+                    int(k[1] * 16 + 8),
+                    int(k[2] * 16 + 8),
+                    255,
+                )
+            else:
+                corners = [
+                    img.getpixel((0, 0)),
+                    img.getpixel((w - 1, 0)),
+                    img.getpixel((0, h - 1)),
+                    img.getpixel((w - 1, h - 1)),
+                ]
+                fill = max(set(corners), key=corners.count)
+
+        try:
+            margin_ratio = max(0.0, float(padding_ratio))
+        except Exception:
+            margin_ratio = 0.0
+
+        side = max(w, h)
+        if margin_ratio > 0.0:
+            side = int(round(side * (1.0 + margin_ratio * 2.0)))
+            side = max(side, max(w, h))
+        elif w == h:
+            return image_bytes
+        canvas = Image.new("RGBA", (side, side), fill)
+        offset_x = (side - w) // 2
+        offset_y = (side - h) // 2
+        canvas.paste(img, (offset_x, offset_y), img)
+
+        out = io.BytesIO()
+        canvas.save(out, format="PNG")
         return out.getvalue()
     except Exception:
         return image_bytes
@@ -448,6 +631,7 @@ def prepare_image_for_pptx(
     target_width_px: Optional[int] = None,
     target_height_px: Optional[int] = None,
     base_dpi: float = 192.0,
+    aws_icon_color_hex: Optional[str] = None,
 ) -> Tuple[Optional[bytes], Optional[int], Optional[int], bool]:
     """
     End-to-end image preparation for PPTX placement.
@@ -458,12 +642,16 @@ def prepare_image_for_pptx(
       3) Trim transparent outer padding for AWS icons.
       4) Return final bytes and pixel dimensions.
     """
+    from ..stencil.aws_icons import is_aws_shape_type
+
     image_bytes = load_image_bytes(data_uri=data_uri, file_path=file_path)
     if not image_bytes:
         return None, None, None, False
 
     svg = is_svg_image(image_bytes, data_uri=data_uri, file_path=file_path)
     if svg:
+        if is_aws_shape_type(shape_type) and aws_icon_color_hex:
+            image_bytes = recolor_svg_bytes(image_bytes, aws_icon_color_hex)
         dpi = calculate_optimal_dpi(image_bytes, base_dpi=base_dpi)
         image_bytes = svg_bytes_to_png(
             image_bytes,
@@ -474,8 +662,13 @@ def prepare_image_for_pptx(
         if not image_bytes:
             return None, None, None, True
 
-    if shape_type and shape_type.startswith("mxgraph.aws4"):
+    if is_aws_shape_type(shape_type):
         image_bytes = trim_transparent_padding(image_bytes)
+        # Non-resourceIcon AWS shapes may include opaque background padding.
+        # Trim the uniform outer border to match draw.io rendering.
+        shape_type_lower = shape_type.lower() if shape_type else ""
+        if "resourceicon" not in shape_type_lower:
+            image_bytes = trim_solid_background_padding(image_bytes)
 
     w, h = get_image_size(image_bytes)
     return image_bytes, w, h, svg
