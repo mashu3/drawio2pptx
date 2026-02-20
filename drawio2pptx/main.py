@@ -101,10 +101,6 @@ Examples:
         
         # Create logger with config
         logger = ConversionLogger(config=config)
-        if config.image_cache_enabled:
-            logger.info(f"Image cache: enabled ({config.image_cache_dir})")
-        else:
-            logger.info("Image cache: disabled")
         reset_image_cache_stats()
         
         # Load draw.io file
@@ -137,12 +133,14 @@ Examples:
         print(f"Saved {output_path} ({slide_count} slides)")
         if config.image_cache_enabled:
             stats = get_image_cache_stats()
-            logger.info(
-                "Image cache stats: "
-                f"hits={stats.get('hits', 0)}, "
-                f"misses={stats.get('misses', 0)}, "
-                f"writes={stats.get('writes', 0)}"
-            )
+            hits = int(stats.get("hits", 0))
+            misses = int(stats.get("misses", 0))
+            writes = int(stats.get("writes", 0))
+            if hits > 0 or misses > 0 or writes > 0:
+                logger.info(
+                    "Image cache stats: "
+                    f"hits={hits}, misses={misses}, writes={writes}"
+                )
 
         # Display warnings
         warnings = logger.get_warnings()
