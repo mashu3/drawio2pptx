@@ -4,6 +4,7 @@ Configuration and policy module
 Manages settings such as approximation tables, scale policies, margins, DPI, font replacements for conversion
 """
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 
@@ -36,6 +37,11 @@ class ConversionConfig:
     # SVG to PNG backend: 'cairosvg' (default) or 'resvg'
     # cairosvg is LGPL; use as library only (no modification).
     svg_backend: str = 'cairosvg'
+
+    # Local cache for URL image fetch / SVG->PNG conversion.
+    # If enabled, conversion results are stored as PNG files.
+    image_cache_enabled: bool = True
+    image_cache_dir: str = str(Path.home() / ".cache" / "drawio2pptx" / "images")
     
     # Font replacement map
     font_replacements: Dict[str, str] = None

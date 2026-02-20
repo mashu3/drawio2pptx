@@ -7,8 +7,14 @@ CairoSVG is LGPL; used as library only (no modification).
 from typing import Optional, Tuple
 import re
 import io
+import os
+import hashlib
+import shutil
 import urllib.request
+from pathlib import Path
 from ..config import default_config
+
+_IMAGE_CACHE_STATS = {"hits": 0, "misses": 0, "writes": 0}
 
 
 def _svg_to_png_cairosvg(svg_data: str, dpi: float, output_width: Optional[int] = None, output_height: Optional[int] = None) -> Optional[bytes]:
@@ -364,6 +370,79 @@ def extract_data_uri_image(data_uri: str) -> Optional[bytes]:
         return None
 
 
+def _image_cache_dir() -> Path:
+    cache_dir = getattr(
+        default_config,
+        "image_cache_dir",
+        str(Path.home() / ".cache" / "drawio2pptx" / "images"),
+    )
+    return Path(cache_dir).expanduser()
+
+
+def _image_cache_enabled() -> bool:
+    return bool(getattr(default_config, "image_cache_enabled", True))
+
+
+def _cache_file_path(cache_key: str) -> Path:
+    return _image_cache_dir() / f"{cache_key}.png"
+
+
+def _build_cache_key(*parts: object) -> str:
+    raw = "|".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _read_cached_png(cache_key: str) -> Optional[bytes]:
+    if not _image_cache_enabled():
+        return None
+    path = _cache_file_path(cache_key)
+    try:
+        if path.exists() and path.is_file():
+            _IMAGE_CACHE_STATS["hits"] += 1
+            return path.read_bytes()
+    except Exception:
+        return None
+    _IMAGE_CACHE_STATS["misses"] += 1
+    return None
+
+
+def _write_cached_png(cache_key: str, png_bytes: bytes) -> None:
+    if not _image_cache_enabled():
+        return
+    path = _cache_file_path(cache_key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".tmp")
+        tmp_path.write_bytes(png_bytes)
+        os.replace(tmp_path, path)
+        _IMAGE_CACHE_STATS["writes"] += 1
+    except Exception:
+        # Cache write failures must not affect conversion behavior.
+        return
+
+
+def clear_image_cache(cache_dir: Optional[str] = None) -> None:
+    """
+    Clear local image cache directory.
+    """
+    path = Path(cache_dir).expanduser() if cache_dir else _image_cache_dir()
+    try:
+        if path.exists():
+            shutil.rmtree(path)
+    except Exception:
+        return
+
+
+def reset_image_cache_stats() -> None:
+    _IMAGE_CACHE_STATS["hits"] = 0
+    _IMAGE_CACHE_STATS["misses"] = 0
+    _IMAGE_CACHE_STATS["writes"] = 0
+
+
+def get_image_cache_stats() -> dict:
+    return dict(_IMAGE_CACHE_STATS)
+
+
 def load_image_bytes(data_uri: Optional[str] = None, file_path: Optional[str] = None) -> Optional[bytes]:
     """
     Load image bytes from data URI, HTTP(S) URL, or local file path.
@@ -644,6 +723,30 @@ def prepare_image_for_pptx(
     """
     from ..stencil.aws_icons import is_aws_shape_type
 
+    cache_key = None
+    if file_path and file_path.startswith(("http://", "https://")):
+        lower_path = file_path.lower()
+        looks_like_svg_url = (
+            lower_path.endswith(".svg")
+            or ".svg?" in lower_path
+            or ".svg#" in lower_path
+        )
+        if looks_like_svg_url:
+            cache_key = _build_cache_key(
+                "prepared-image",
+                file_path,
+                shape_type,
+                target_width_px,
+                target_height_px,
+                base_dpi,
+                aws_icon_color_hex,
+                getattr(default_config, "svg_backend", "cairosvg"),
+            )
+            cached_png = _read_cached_png(cache_key)
+            if cached_png:
+                w_cached, h_cached = get_image_size(cached_png)
+                return cached_png, w_cached, h_cached, True
+
     image_bytes = load_image_bytes(data_uri=data_uri, file_path=file_path)
     if not image_bytes:
         return None, None, None, False
@@ -669,6 +772,9 @@ def prepare_image_for_pptx(
         shape_type_lower = shape_type.lower() if shape_type else ""
         if "resourceicon" not in shape_type_lower:
             image_bytes = trim_solid_background_padding(image_bytes)
+
+    if cache_key and image_bytes:
+        _write_cached_png(cache_key, image_bytes)
 
     w, h = get_image_size(image_bytes)
     return image_bytes, w, h, svg
