@@ -1583,17 +1583,33 @@ class DrawIOLoader:
         edge_style, is_elbow_edge = self._parse_connector_edge_style(style_str)
         style = self._build_connector_style(cell, mgm_root, style_str)
         points_raw, source_point, target_point, points_for_ports = self._parse_connector_geometry(cell, mgm_root)
+        has_explicit_floating_endpoints = (
+            (source_id is None or source_id == "")
+            and (target_id is None or target_id == "")
+            and source_point is not None
+            and target_point is not None
+        )
 
         # If target is missing but target_point exists, try to infer target from point coordinates
         # Check both None and empty string cases
-        if not target_shape and target_point and (target_id is None or target_id == ""):
+        if (
+            not has_explicit_floating_endpoints
+            and not target_shape
+            and target_point
+            and (target_id is None or target_id == "")
+        ):
             inferred_target_id = self._find_shape_at_point(target_point, shapes_dict, tolerance=30.0)
             if inferred_target_id:
                 target_id = inferred_target_id
                 target_shape = shapes_dict.get(target_id)
         
         # Similarly, if source is missing but source_point exists, try to infer source from point coordinates
-        if not source_shape and source_point and (source_id is None or source_id == ""):
+        if (
+            not has_explicit_floating_endpoints
+            and not source_shape
+            and source_point
+            and (source_id is None or source_id == "")
+        ):
             inferred_source_id = self._find_shape_at_point(source_point, shapes_dict, tolerance=30.0)
             if inferred_source_id:
                 source_id = inferred_source_id

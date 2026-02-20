@@ -492,6 +492,32 @@ def test_parse_connector_geometry_with_array_points() -> None:
     assert len(points_for_ports) == 2
 
 
+def test_extract_connector_keeps_floating_source_target_points() -> None:
+    """Standalone edge with sourcePoint/targetPoint must stay floating (no inferred shape attachment)."""
+    loader = DrawIOLoader()
+    root = ET.fromstring("""<mxGraphModel arrows="1"><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel>""")
+    cell = ET.Element("mxCell")
+    cell.set("id", "e1")
+    cell.set("edge", "1")
+    cell.set("parent", "1")
+    cell.set("style", "edgeStyle=none;strokeWidth=3;")
+    geo = ET.SubElement(cell, "mxGeometry")
+    ET.SubElement(geo, "mxPoint", {"x": "100", "y": "200", "as": "sourcePoint"})
+    ET.SubElement(geo, "mxPoint", {"x": "100", "y": "50", "as": "targetPoint"})
+    shapes_dict = {
+        "s1": ShapeElement(id="s1", x=90.0, y=190.0, w=20.0, h=20.0),
+        "t1": ShapeElement(id="t1", x=90.0, y=40.0, w=20.0, h=20.0),
+    }
+
+    connector, labels = loader._extract_connector(cell, root, shapes_dict)
+
+    assert labels == []
+    assert connector is not None
+    assert connector.source_id is None
+    assert connector.target_id is None
+    assert connector.points == [(100.0, 200.0), (100.0, 50.0)]
+
+
 # ---- DrawIOLoader port / orthogonal / boundary helpers ----
 def test_infer_port_side() -> None:
     """_infer_port_side returns left/right/top/bottom or None for center."""
