@@ -513,6 +513,16 @@ def recolor_svg_bytes(svg_bytes: bytes, color_hex: str) -> bytes:
         return svg_bytes
 
 
+def _svg_contains_gradient(svg_bytes: bytes) -> bool:
+    """Return True when SVG defines gradient elements."""
+    try:
+        svg_str = svg_bytes.decode("utf-8")
+    except Exception:
+        return False
+    s = svg_str.lower()
+    return ("<lineargradient" in s) or ("<radialgradient" in s)
+
+
 def trim_transparent_padding(image_bytes: bytes) -> bytes:
     """
     Trim transparent outer padding from a raster image.
@@ -753,7 +763,11 @@ def prepare_image_for_pptx(
 
     svg = is_svg_image(image_bytes, data_uri=data_uri, file_path=file_path)
     if svg:
-        if is_aws_shape_type(shape_type) and aws_icon_color_hex:
+        if (
+            is_aws_shape_type(shape_type)
+            and aws_icon_color_hex
+            and not _svg_contains_gradient(image_bytes)
+        ):
             image_bytes = recolor_svg_bytes(image_bytes, aws_icon_color_hex)
         dpi = calculate_optimal_dpi(image_bytes, base_dpi=base_dpi)
         image_bytes = svg_bytes_to_png(

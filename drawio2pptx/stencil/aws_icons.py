@@ -175,6 +175,50 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.external_sdk", None): _url_spec(f"{_RES}/SDK.svg"),
     ("mxgraph.aws4.shield2", None): _url_spec(f"{_RES}/Shield.svg"),
     ("mxgraph.aws4.source_code", None): _url_spec(f"{_RES}/SourceCode.svg"),
+    # category SVG has a relatively wide frame; use aws4 stencil path to reduce visual padding
+    ("mxgraph.aws4.application_integration", None): _aws4_spec("application integration", "#E7157B", "#FFFFFF", 70.0, 70.0),
+    # AR & VR category/service are still present in draw.io aws4.xml,
+    # but not in current aws-icons static SVG package.
+    ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.ar_vr'): _aws4_spec("ar vr", "#BC1356", "#FFFFFF", 70.0, 70.0),
+    ("mxgraph.aws4.ar_vr", None): _aws4_spec("ar vr", "#FFFFFF", "#BC1356", 70.0, 70.0),
+    ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.sumerian'): _aws4_spec("sumerian", "#BC1356", "#FFFFFF", 64.0, 64.0),
+    ("mxgraph.aws4.sumerian", None): _aws4_spec("sumerian", "#FFFFFF", "#BC1356", 64.0, 64.0),
+    ("mxgraph.aws4.api_gateway", None): _url_spec(f"{_ARCH}/AmazonAPIGateway.svg"),
+    ("mxgraph.aws4.amazon_api_gateway", None): _url_spec(f"{_ARCH}/AmazonAPIGateway.svg"),
+    ("mxgraph.aws4.mq", None): _url_spec(f"{_ARCH}/AmazonMQ.svg"),
+    ("mxgraph.aws4.amazon_mq", None): _url_spec(f"{_ARCH}/AmazonMQ.svg"),
+    ("mxgraph.aws4.sqs", None): _url_spec(f"{_ARCH}/AmazonSimpleQueueService.svg"),
+    ("mxgraph.aws4.amazon_sqs", None): _url_spec(f"{_ARCH}/AmazonSimpleQueueService.svg"),
+    ("mxgraph.aws4.appsync", None): _url_spec(f"{_ARCH}/AWSAppSync.svg"),
+    ("mxgraph.aws4.amazon_appsync", None): _url_spec(f"{_ARCH}/AWSAppSync.svg"),
+    ("mxgraph.aws4.b2b_data_interchange", None): _url_spec(f"{_ARCH}/AWSB2BDataInterchange.svg"),
+    ("mxgraph.aws4.amazon_b2b_data_interchange", None): _url_spec(f"{_ARCH}/AWSB2BDataInterchange.svg"),
+    ("mxgraph.aws4.eventbridge", None): _url_spec(f"{_ARCH}/AmazonEventBridge.svg"),
+    ("mxgraph.aws4.amazon_eventbridge", None): _url_spec(f"{_ARCH}/AmazonEventBridge.svg"),
+    ("mxgraph.aws4.managed_workflows_for_apache_airflow", None): _url_spec(f"{_ARCH}/AmazonManagedWorkflowsforApacheAirflow.svg"),
+    ("mxgraph.aws4.amazon_managed_workflows_for_apache_airflow", None): _url_spec(f"{_ARCH}/AmazonManagedWorkflowsforApacheAirflow.svg"),
+    ("mxgraph.aws4.step_functions", None): _url_spec(f"{_ARCH}/AWSStepFunctions.svg"),
+    ("mxgraph.aws4.amazon_step_functions", None): _url_spec(f"{_ARCH}/AWSStepFunctions.svg"),
+    ("mxgraph.aws4.mobile_application", None): _url_spec(f"{_ARCH}/AWSConsoleMobileApplication.svg"),
+    ("mxgraph.aws4.amazon_mobile_application", None): _url_spec(f"{_ARCH}/AWSConsoleMobileApplication.svg"),
+    ("mxgraph.aws4.express_workflow", None): _url_spec(f"{_ARCH}/AWSExpressWorkflows.svg"),
+    ("mxgraph.aws4.amazon_express_workflow", None): _url_spec(f"{_ARCH}/AWSExpressWorkflows.svg"),
+    ("mxgraph.aws4.appflow", None): _url_spec(f"{_ARCH}/AmazonAppFlow.svg"),
+    ("mxgraph.aws4.amazon_appflow", None): _url_spec(f"{_ARCH}/AmazonAppFlow.svg"),
+    ("mxgraph.aws4.endpoint", None): _url_spec(f"{_RES}/AmazonAPIGatewayEndpoint.svg"),
+    ("mxgraph.aws4.event", None): _url_spec(f"{_RES}/AmazonEventBridgeEvent.svg"),
+    ("mxgraph.aws4.eventbridge_pipes", None): _url_spec(f"{_RES}/AmazonEventBridgePipes.svg"),
+    ("mxgraph.aws4.eventbridge_custom_event_bus_resource", None): _url_spec(f"{_RES}/AmazonEventBridgeCustomEventBus.svg"),
+    ("mxgraph.aws4.eventbridge_default_event_bus_resource", None): _url_spec(f"{_RES}/AmazonEventBridgeDefaultEventBus.svg"),
+    ("mxgraph.aws4.eventbridge_saas_partner_event_bus_resource", None): _url_spec(f"{_RES}/AmazonEventBridgeSaasPartnerEvent.svg"),
+    ("mxgraph.aws4.eventbridge_scheduler", None): _url_spec(f"{_RES}/AmazonEventBridgeScheduler.svg"),
+    ("mxgraph.aws4.eventbridge_schema", None): _url_spec(f"{_RES}/AmazonEventBridgeSchema.svg"),
+    ("mxgraph.aws4.eventbridge_schema_registry", None): _url_spec(f"{_RES}/AmazonEventBridgeSchemaRegistry.svg"),
+    ("mxgraph.aws4.mq_broker", None): _url_spec(f"{_RES}/AmazonMQBroker.svg"),
+    ("mxgraph.aws4.event_resource", None): _url_spec(f"{_RES}/AmazonEventBridgeEvent.svg"),
+    ("mxgraph.aws4.http_notification", None): _url_spec(f"{_RES}/AmazonSimpleNotificationServiceHTTPNotification.svg"),
+    ("mxgraph.aws4.message", None): _url_spec(f"{_RES}/AmazonSimpleQueueServiceMessage.svg"),
+    ("mxgraph.aws4.rule_3", None): _url_spec(f"{_RES}/AmazonEventBridgeRule.svg"),
     ("mxgraph.aws4.analytics", None): _url_spec(f"{_CATEGORY}/Analytics.svg"),
     ("mxgraph.aws4.athena", None): _url_spec(f"{_ARCH}/AmazonAthena.svg"),
     ("mxgraph.aws4.amazon_athena", None): _url_spec(f"{_ARCH}/AmazonAthena.svg"),
@@ -493,6 +537,7 @@ def get_aws_icon_image_data(
     if shape_type_lower in _AWS4_GROUP_SHAPE_TYPES:
         return None
 
+    is_resource_icon_shape = "resourceicon" in shape_type_lower
     res_icon = _get_style_value(style_str, "resIcon")
     drawio_keys = _drawio_lookup_keys(shape_type_lower, res_icon)
     if not drawio_keys:
@@ -505,9 +550,22 @@ def get_aws_icon_image_data(
             continue
         if spec[0] == "aws4xml":
             _, shape_name, bg_hex, fg_hex, canvas_w, canvas_h = spec
+            effective_bg_hex = bg_hex
+            effective_bg_gradient_hex = None
+            effective_gradient_direction = None
+            if is_resource_icon_shape:
+                style_fill = _get_style_value(style_str, "fillColor")
+                if style_fill and style_fill.lower() != "none":
+                    effective_bg_hex = style_fill
+                style_gradient = _get_style_value(style_str, "gradientColor")
+                if style_gradient and style_gradient.lower() != "none":
+                    effective_bg_gradient_hex = style_gradient
+                    effective_gradient_direction = _get_style_value(style_str, "gradientDirection")
             data_uri = _build_shape_data_uri_from_aws4(
                 shape_name=shape_name,
-                background_hex=bg_hex,
+                background_hex=effective_bg_hex,
+                background_gradient_hex=effective_bg_gradient_hex,
+                gradient_direction=effective_gradient_direction,
                 foreground_hex=fg_hex,
                 canvas_w=canvas_w,
                 canvas_h=canvas_h,
@@ -541,6 +599,8 @@ def _build_shape_data_uri_from_aws4(
     *,
     shape_name: str,
     background_hex: str,
+    background_gradient_hex: Optional[str] = None,
+    gradient_direction: Optional[str] = None,
     foreground_hex: str,
     canvas_w: float,
     canvas_h: float,
@@ -560,14 +620,50 @@ def _build_shape_data_uri_from_aws4(
     offset_x = (effective_canvas_w - shape_w) / 2.0
     offset_y = (effective_canvas_h - shape_h) / 2.0
 
+    bg_fill = background_hex
+    defs = ""
+    if (
+        background_hex.lower() != "none"
+        and background_gradient_hex
+        and background_gradient_hex.lower() != "none"
+    ):
+        x1, y1, x2, y2 = _svg_gradient_vector_for_drawio_direction(gradient_direction)
+        defs = (
+            "<defs>"
+            f'<linearGradient id="bgGrad" x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}">'
+            f'<stop offset="0%" stop-color="{background_hex}"/>'
+            f'<stop offset="100%" stop-color="{background_gradient_hex}"/>'
+            "</linearGradient>"
+            "</defs>"
+        )
+        bg_fill = "url(#bgGrad)"
+
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {effective_canvas_w:.3f} {effective_canvas_h:.3f}">'
-        f'<rect x="0" y="0" width="{effective_canvas_w:.3f}" height="{effective_canvas_h:.3f}" fill="{background_hex}"/>'
+        f"{defs}"
+        f'<rect x="0" y="0" width="{effective_canvas_w:.3f}" height="{effective_canvas_h:.3f}" fill="{bg_fill}"/>'
         f'<path d="{path_d}" transform="translate({offset_x:.3f} {offset_y:.3f})" fill="{foreground_hex}" fill-rule="evenodd"/>'
         "</svg>"
     )
     encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     return f"data:image/svg+xml;base64,{encoded}"
+
+
+def _svg_gradient_vector_for_drawio_direction(direction: Optional[str]) -> tuple[float, float, float, float]:
+    """
+    Convert draw.io gradientDirection to SVG linearGradient vector.
+    draw.io uses fillColor + gradientColor, where gradientDirection points to the gradientColor side.
+    """
+    direction_norm = (direction or "").strip().lower()
+    if direction_norm == "north":
+        return (0.0, 1.0, 0.0, 0.0)
+    if direction_norm == "south":
+        return (0.0, 0.0, 0.0, 1.0)
+    if direction_norm == "east":
+        return (0.0, 0.0, 1.0, 0.0)
+    if direction_norm == "west":
+        return (1.0, 0.0, 0.0, 0.0)
+    return (0.0, 0.0, 0.0, 1.0)
 
 
 def _fetch_shape_spec_from_aws4(shape_name: str) -> Optional[tuple[str, float, float]]:
