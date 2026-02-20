@@ -282,7 +282,7 @@ class PPTXWriter:
         # AWS group icons are square badges attached to container border.
         icon_size_px = max(14.0, min(24.0, min(float(shape.w), float(shape.h)) * 0.18))
         icon_key = (getattr(shape.style, "aws_group_icon_key", None) or "").lower()
-        if icon_key == "group_auto_scaling_group":
+        if icon_key.endswith("group_auto_scaling_group"):
             # Special case: auto scaling icon sits on top edge, horizontally centered.
             left_px = shape.x + max((shape.w - icon_size_px) / 2.0, 0.0)
             top_px = shape.y
