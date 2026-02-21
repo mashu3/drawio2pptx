@@ -418,6 +418,15 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.sagemaker_shadow_testing", None): _url_spec(f"{_RES}/AmazonSageMakerAIShadowTesting.svg"),
     ("mxgraph.aws4.sagemaker_train", None): _url_spec(f"{_RES}/AmazonSageMakerAITrain.svg"),
     ("mxgraph.aws4.textract_analyze_lending", None): _url_spec(f"{_RES}/AmazonTextractAnalyzeLending.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Blockchain
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.blockchain", None): _url_spec(f"{_CATEGORY}/Blockchain.svg", cover_scale=1.3),
+    ("mxgraph.aws4.managed_blockchain", None): _url_spec(f"{_ARCH}/AmazonManagedBlockchain.svg"),
+    ("mxgraph.aws4.amazon_managed_blockchain", None): _url_spec(f"{_ARCH}/AmazonManagedBlockchain.svg"),
+    ("mxgraph.aws4.quantum_ledger_database", None): _url_spec(f"{_ARCH}/AmazonQuantumLedgerDatabase.svg"),
+    ("mxgraph.aws4.amazon_quantum_ledger_database", None): _url_spec(f"{_ARCH}/AmazonQuantumLedgerDatabase.svg"),
+    ("mxgraph.aws4.blockchain_resource", None): _url_spec(f"{_RES}/AmazonManagedBlockchainBlockchain.svg"),
 }
 
 
