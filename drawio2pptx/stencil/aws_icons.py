@@ -457,6 +457,20 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.wickr", None): _url_spec(f"{_ARCH}/AWSWickr.svg"),
     ("mxgraph.aws4.aws_wickr", None): _url_spec(f"{_ARCH}/AWSWickr.svg"),
     ("mxgraph.aws4.pinpoint_journey", None): _url_spec(f"{_RES}/AmazonPinpointJourney.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Cloud Financial Management
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.cost_management", None): _url_spec(f"{_CATEGORY}/CloudFinancialManagement.svg", cover_scale=1.3),
+    ("mxgraph.aws4.application_cost_profiler", None): _aws4_spec("application cost profiler", "#FFFFFF", "#FFFFFF", 72.0, 72.0),
+    ("mxgraph.aws4.budgets_2", None): _url_spec(f"{_ARCH}/AWSBudgets.svg"),
+    ("mxgraph.aws4.budgets", None): _url_spec(f"{_ARCH}/AWSBudgets.svg"),
+    ("mxgraph.aws4.cost_and_usage_report", None): _url_spec(f"{_ARCH}/AWSCostandUsageReport.svg"),
+    ("mxgraph.aws4.cost_explorer", None): _url_spec(f"{_ARCH}/AWSCostExplorer.svg"),
+    ("mxgraph.aws4.custom_billing_manager", None): _url_spec(f"{_ARCH}/AWSBillingConductor.svg"),
+    ("mxgraph.aws4.billing_conductor", None): _url_spec(f"{_ARCH}/AWSBillingConductor.svg"),
+    ("mxgraph.aws4.aws_billing_conductor", None): _url_spec(f"{_ARCH}/AWSBillingConductor.svg"),
+    ("mxgraph.aws4.reserved_instance_reporting", None): _url_spec(f"{_ARCH}/ReservedInstanceReporting.svg"),
+    ("mxgraph.aws4.savings_plans", None): _url_spec(f"{_ARCH}/SavingsPlans.svg"),
 }
 
 
