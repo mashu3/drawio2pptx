@@ -427,6 +427,36 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.quantum_ledger_database", None): _url_spec(f"{_ARCH}/AmazonQuantumLedgerDatabase.svg"),
     ("mxgraph.aws4.amazon_quantum_ledger_database", None): _url_spec(f"{_ARCH}/AmazonQuantumLedgerDatabase.svg"),
     ("mxgraph.aws4.blockchain_resource", None): _url_spec(f"{_RES}/AmazonManagedBlockchainBlockchain.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Business Applications
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.business_application", None): _url_spec(f"{_CATEGORY}/BusinessApplications.svg", cover_scale=1.3),
+    ("mxgraph.aws4.alexa_for_business", None): _url_spec(f"{_ARCH}/AlexaForBusiness.svg"),
+    ("mxgraph.aws4.amazon_alexa_for_business", None): _url_spec(f"{_ARCH}/AlexaForBusiness.svg"),
+    ("mxgraph.aws4.chime", None): _url_spec(f"{_ARCH}/AmazonChime.svg"),
+    ("mxgraph.aws4.amazon_chime", None): _url_spec(f"{_ARCH}/AmazonChime.svg"),
+    ("mxgraph.aws4.chime_sdk", None): _url_spec(f"{_ARCH}/AmazonChimeSDK.svg"),
+    ("mxgraph.aws4.amazon_chime_sdk", None): _url_spec(f"{_ARCH}/AmazonChimeSDK.svg"),
+    ("mxgraph.aws4.connect", None): _url_spec(f"{_ARCH}/AmazonConnect.svg"),
+    ("mxgraph.aws4.amazon_connect", None): _url_spec(f"{_ARCH}/AmazonConnect.svg"),
+    ("mxgraph.aws4.honeycode", None): _aws4_spec("honeycode", "#FFFFFF", "#FFFFFF", 68.0, 68.0),
+    ("mxgraph.aws4.pinpoint", None): _url_spec(f"{_ARCH}/AmazonPinpoint.svg"),
+    ("mxgraph.aws4.amazon_pinpoint", None): _url_spec(f"{_ARCH}/AmazonPinpoint.svg"),
+    ("mxgraph.aws4.simple_email_service", None): _url_spec(f"{_ARCH}/AmazonSimpleEmailService.svg"),
+    ("mxgraph.aws4.amazon_simple_email_service", None): _url_spec(f"{_ARCH}/AmazonSimpleEmailService.svg"),
+    ("mxgraph.aws4.workdocs", None): _url_spec(f"{_ARCH}/AmazonWorkDocs.svg"),
+    ("mxgraph.aws4.amazon_workdocs", None): _url_spec(f"{_ARCH}/AmazonWorkDocs.svg"),
+    ("mxgraph.aws4.workmail", None): _url_spec(f"{_ARCH}/AmazonWorkMail.svg"),
+    ("mxgraph.aws4.amazon_workmail", None): _url_spec(f"{_ARCH}/AmazonWorkMail.svg"),
+    ("mxgraph.aws4.appfabric", None): _url_spec(f"{_ARCH}/AWSAppFabric.svg"),
+    ("mxgraph.aws4.aws_appfabric", None): _url_spec(f"{_ARCH}/AWSAppFabric.svg"),
+    ("mxgraph.aws4.end_user_messaging", None): _url_spec(f"{_ARCH}/AWSEndUserMessaging.svg"),
+    ("mxgraph.aws4.aws_end_user_messaging", None): _url_spec(f"{_ARCH}/AWSEndUserMessaging.svg"),
+    ("mxgraph.aws4.supply_chain", None): _url_spec(f"{_ARCH}/AWSSupplyChain.svg"),
+    ("mxgraph.aws4.aws_supply_chain", None): _url_spec(f"{_ARCH}/AWSSupplyChain.svg"),
+    ("mxgraph.aws4.wickr", None): _url_spec(f"{_ARCH}/AWSWickr.svg"),
+    ("mxgraph.aws4.aws_wickr", None): _url_spec(f"{_ARCH}/AWSWickr.svg"),
+    ("mxgraph.aws4.pinpoint_journey", None): _url_spec(f"{_RES}/AmazonPinpointJourney.svg"),
 }
 
 
