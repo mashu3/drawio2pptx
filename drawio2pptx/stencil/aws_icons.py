@@ -38,8 +38,20 @@ _AWS4_STENCIL_XML_URL = (
     "https://raw.githubusercontent.com/jgraph/drawio/dev/src/main/webapp/stencils/aws4.xml"
 )
 
-def _url_spec(value: str) -> tuple[str, str]:
-    return ("url", value)
+def _url_spec(
+    value: str,
+    *,
+    cover_scale: Optional[float] = None,
+) -> tuple:
+    if cover_scale is None:
+        return ("url", value)
+    try:
+        scale = float(cover_scale)
+    except Exception:
+        return ("url", value)
+    if scale <= 1.0:
+        return ("url", value)
+    return ("url", value, {"cover_scale": scale})
 
 
 def _aws4_spec(
@@ -48,8 +60,19 @@ def _aws4_spec(
     foreground_hex: str,
     canvas_w: float,
     canvas_h: float,
-) -> tuple[str, str, str, str, float, float]:
-    return ("aws4xml", shape_name, background_hex, foreground_hex, canvas_w, canvas_h)
+    *,
+    cover_scale: Optional[float] = None,
+) -> tuple:
+    spec = ("aws4xml", shape_name, background_hex, foreground_hex, canvas_w, canvas_h)
+    if cover_scale is None:
+        return spec
+    try:
+        scale = float(cover_scale)
+    except Exception:
+        return spec
+    if scale <= 1.0:
+        return spec
+    return (*spec, {"cover_scale": scale})
 
 
 def _group_icon_spec(
@@ -57,6 +80,7 @@ def _group_icon_spec(
     *,
     padding_ratio: float = 0.18,
     padding_color_mode: str = "stroke",
+    cover_scale: Optional[float] = None,
     match_label: Optional[str] = None,
     match_fill: Optional[str] = None,
 ) -> Dict[str, object]:
@@ -70,6 +94,8 @@ def _group_icon_spec(
         "padding_ratio": float(padding_ratio),
         "padding_color_mode": padding_color_mode,
     }
+    if cover_scale is not None:
+        entry["cover_scale"] = float(cover_scale)
     if match_label is not None:
         entry["match_label"] = match_label
     if match_fill is not None:
@@ -81,14 +107,25 @@ def _group_icon_spec(
 #   (shape=mxgraph.aws4.*) or
 #   (shape=mxgraph.aws4.resourceIcon, resIcon=mxgraph.aws4.*)
 # Value format:
-# - ("url", "<url-or-data-uri>")
-# - ("aws4xml", "<shape_name>", "<bg_hex>", "<fg_hex>", canvas_w, canvas_h)
+# - ("url", "<url-or-data-uri>"[, {"cover_scale": n}])
+# - ("aws4xml", "<shape_name>", "<bg_hex>", "<fg_hex>", canvas_w, canvas_h[, {"cover_scale": n}])
 # Draw.io-native AWS icon mapping.
 # Key format: (shape_type, res_icon)
 #   - direct shape: ("mxgraph.aws4.<shape>", None)
 #   - resourceIcon: ("mxgraph.aws4.resourceicon", "mxgraph.aws4.<resIcon>")
 # Value format: _url_spec(...) or _aws4_spec(...)
+#
+# Grouping guide (draw.io palette names)
+# - AWS / General Resources
+# - AWS / Application Integration
+# - AWS / AR & VR
+# - AWS / Analytics
+# - AWS / Artificial Intelligence
+#
 _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
+    # -------------------------------------------------------------------------
+    # AWS / Core services / legacy aliases (cross-category bootstrap mappings)
+    # -------------------------------------------------------------------------
     ("mxgraph.aws4.lambda", None): _url_spec(f"{_ARCH}/AWSLambda.svg"),
     ("mxgraph.aws4.lambda_function", None): _url_spec(f"{_RES}/AWSLambdaLambdaFunction.svg"),
     ("mxgraph.aws4.cloudwatch", None): _url_spec(f"{_ARCH}/AmazonCloudWatch.svg"),
@@ -114,6 +151,9 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.email_notification", None): _url_spec(f"{_AWS_ICON_SVG_BASE}/Res_Application-Integration/Res_48_Light/Res_Amazon-Simple-Notification-Service_Email-Notification_48_Light.svg"),
     ("mxgraph.aws4.rule_2", None): _url_spec(f"{_RES}/AmazonCloudWatchRule.svg"),
     ("mxgraph.aws4.rule", None): _url_spec(f"{_RES}/AmazonCloudWatchRule.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / General Resources
+    # -------------------------------------------------------------------------
     ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.marketplace'): _url_spec(f"{_ARCH}/AWSMarketplace.svg"),
     ("mxgraph.aws4.marketplace", None): _url_spec(f"{_ARCH}/AWSMarketplaceDark.svg"),
     ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.all_products'): _aws4_spec("all products", "#232F3E", "#FFFFFF", 68.0, 68.0),
@@ -175,15 +215,26 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.external_sdk", None): _url_spec(f"{_RES}/SDK.svg"),
     ("mxgraph.aws4.shield2", None): _url_spec(f"{_RES}/Shield.svg"),
     ("mxgraph.aws4.source_code", None): _url_spec(f"{_RES}/SourceCode.svg"),
-    # category SVG has a relatively wide frame; use aws4 stencil path to reduce visual padding
-    ("mxgraph.aws4.application_integration", None): _aws4_spec("application integration", "#E7157B", "#FFFFFF", 70.0, 70.0),
-    # AR & VR category/service are still present in draw.io aws4.xml,
-    # but not in current aws-icons static SVG package.
+    # -------------------------------------------------------------------------
+    # AWS / Illustration
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.illustration_users", None): _aws4_spec("illustration users", "none", "#879196", 100.0, 100.0),
+    ("mxgraph.aws4.illustration_notification", None): _aws4_spec("illustration notification", "none", "#879196", 100.0, 100.0),
+    ("mxgraph.aws4.illustration_devices", None): _aws4_spec("illustration devices", "none", "#879196", 100.0, 100.0),
+    ("mxgraph.aws4.illustration_office_building", None): _aws4_spec("illustration office building", "none", "#879196", 100.0, 100.0),
+    ("mxgraph.aws4.illustration_desktop", None): _aws4_spec("illustration desktop", "none", "#879196", 100.0, 100.0),
+    # -------------------------------------------------------------------------
+    # AWS / AR & VR
+    # -------------------------------------------------------------------------
     ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.ar_vr'): _aws4_spec("ar vr", "#BC1356", "#FFFFFF", 70.0, 70.0),
     ("mxgraph.aws4.ar_vr", None): _aws4_spec("ar vr", "#FFFFFF", "#BC1356", 70.0, 70.0),
     ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.sumerian'): _aws4_spec("sumerian", "#BC1356", "#FFFFFF", 64.0, 64.0),
     ("mxgraph.aws4.sumerian", None): _aws4_spec("sumerian", "#FFFFFF", "#BC1356", 64.0, 64.0),
+    # -------------------------------------------------------------------------
+    # AWS / Application Integration
+    # -------------------------------------------------------------------------
     ("mxgraph.aws4.api_gateway", None): _url_spec(f"{_ARCH}/AmazonAPIGateway.svg"),
+    ("mxgraph.aws4.application_integration", None): _url_spec(f"{_CATEGORY}/ApplicationIntegration.svg", cover_scale=1.3),
     ("mxgraph.aws4.amazon_api_gateway", None): _url_spec(f"{_ARCH}/AmazonAPIGateway.svg"),
     ("mxgraph.aws4.mq", None): _url_spec(f"{_ARCH}/AmazonMQ.svg"),
     ("mxgraph.aws4.amazon_mq", None): _url_spec(f"{_ARCH}/AmazonMQ.svg"),
@@ -219,7 +270,10 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.http_notification", None): _url_spec(f"{_RES}/AmazonSimpleNotificationServiceHTTPNotification.svg"),
     ("mxgraph.aws4.message", None): _url_spec(f"{_RES}/AmazonSimpleQueueServiceMessage.svg"),
     ("mxgraph.aws4.rule_3", None): _url_spec(f"{_RES}/AmazonEventBridgeRule.svg"),
-    ("mxgraph.aws4.analytics", None): _url_spec(f"{_CATEGORY}/Analytics.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Analytics
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.analytics", None): _url_spec(f"{_CATEGORY}/Analytics.svg", cover_scale=1.3),
     ("mxgraph.aws4.athena", None): _url_spec(f"{_ARCH}/AmazonAthena.svg"),
     ("mxgraph.aws4.amazon_athena", None): _url_spec(f"{_ARCH}/AmazonAthena.svg"),
     ("mxgraph.aws4.datazone", None): _url_spec(f"{_ARCH}/AmazonDataZone.svg"),
@@ -251,9 +305,6 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.amazon_clean_rooms", None): _url_spec(f"{_ARCH}/AWSCleanRooms.svg"),
     ("mxgraph.aws4.redshift", None): _url_spec(f"{_ARCH}/AmazonRedshift.svg"),
     ("mxgraph.aws4.amazon_redshift", None): _url_spec(f"{_ARCH}/AmazonRedshift.svg"),
-    ("mxgraph.aws4.sagemaker_2", None): _url_spec(f"{_ARCH}/AmazonSageMaker.svg"),
-    ("mxgraph.aws4.sagemaker", None): _url_spec(f"{_ARCH}/AmazonSageMaker.svg"),
-    ("mxgraph.aws4.amazon_sagemaker", None): _url_spec(f"{_ARCH}/AmazonSageMaker.svg"),
     ("mxgraph.aws4.data_pipeline", None): _url_spec(f"{_ARCH}/AWSDataPipeline.svg"),
     ("mxgraph.aws4.aws_data_pipeline", None): _url_spec(f"{_ARCH}/AWSDataPipeline.svg"),
     ("mxgraph.aws4.entity_resolution", None): _url_spec(f"{_ARCH}/AWSEntityResolution.svg"),
@@ -309,6 +360,64 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.aws_glue_data_quality", None): _url_spec(f"{_RES}/AWSGlueDataQuality.svg"),
     ("mxgraph.aws4.redshift_ml", None): _url_spec(f"{_RES}/AmazonRedshiftML.svg"),
     ("mxgraph.aws4.redshift_query_editor_v20_light", None): _url_spec(f"{_RES}/AmazonRedshiftQueryEditorv20.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Artificial Intelligence
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.augmented_ai", None): _url_spec(f"{_ARCH}/AmazonAugmentedAIA2I.svg", cover_scale=1.1),
+    ("mxgraph.aws4.apache_mxnet_on_aws", None): _url_spec(f"{_ARCH}/ApacheMXNetonAWS.svg"),
+    ("mxgraph.aws4.app_studio", None): _url_spec(f"{_ARCH}/AWSAppStudio.svg"),
+    ("mxgraph.aws4.bedrock", None): _url_spec(f"{_ARCH}/AmazonBedrock.svg", cover_scale=1.1),
+    ("mxgraph.aws4.codeguru_2", None): _url_spec(f"{_ARCH}/AmazonCodeGuru.svg"),
+    ("mxgraph.aws4.codewhisperer", None): _url_spec(f"{_ARCH}/AmazonCodeWhisperer.svg"),
+    ("mxgraph.aws4.comprehend", None): _url_spec(f"{_ARCH}/AmazonComprehend.svg"),
+    ("mxgraph.aws4.comprehend_medical", None): _url_spec(f"{_ARCH}/AmazonComprehendMedical.svg"),
+    ("mxgraph.aws4.deep_learning_amis", None): _url_spec(f"{_ARCH}/AWSDeepLearningAMIs.svg"),
+    ("mxgraph.aws4.deep_learning_containers", None): _url_spec(f"{_ARCH}/AWSDeepLearningContainers.svg"),
+    ("mxgraph.aws4.deepcomposer", None): _url_spec(f"{_ARCH}/AWSDeepComposer.svg"),
+    ("mxgraph.aws4.deeplens", None): _aws4_spec("deeplens", "#01A88D", "#FFFFFF", 70.0, 70.0),
+    ("mxgraph.aws4.deepracer", None): _url_spec(f"{_ARCH}/AWSDeepRacer.svg"),
+    ("mxgraph.aws4.devops_guru", None): _url_spec(f"{_ARCH}/AmazonDevOpsGuru.svg"),
+    ("mxgraph.aws4.elastic_inference_2", None): _url_spec(f"{_ARCH}/AmazonElasticInference.svg"),
+    ("mxgraph.aws4.forecast", None): _url_spec(f"{_ARCH}/AmazonForecast.svg"),
+    ("mxgraph.aws4.fraud_detector", None): _url_spec(f"{_ARCH}/AmazonFraudDetector.svg"),
+    ("mxgraph.aws4.healthimaging", None): _url_spec(f"{_ARCH}/AWSHealthImaging.svg"),
+    ("mxgraph.aws4.healthlake", None): _url_spec(f"{_ARCH}/AWSHealthLake.svg"),
+    ("mxgraph.aws4.healthscribe", None): _url_spec(f"{_ARCH}/AWSHealthScribe.svg"),
+    ("mxgraph.aws4.kendra", None): _url_spec(f"{_ARCH}/AmazonKendra.svg"),
+    ("mxgraph.aws4.lex", None): _url_spec(f"{_ARCH}/AmazonLex.svg"),
+    ("mxgraph.aws4.lookout_for_equipment", None): _url_spec(f"{_ARCH}/AmazonLookoutforEquipment.svg"),
+    ("mxgraph.aws4.lookout_for_metrics", None): _url_spec(f"{_ARCH}/AmazonLookoutforMetrics.svg"),
+    ("mxgraph.aws4.lookout_for_vision", None): _url_spec(f"{_ARCH}/AmazonLookoutforVision.svg"),
+    ("mxgraph.aws4.machine_learning", None): _url_spec(f"{_CATEGORY}/ArtificialIntelligence.svg", cover_scale=1.3),
+    ("mxgraph.aws4.monitron", None): _url_spec(f"{_ARCH}/AmazonMonitron.svg"),
+    ("mxgraph.aws4.neuron_ml_sdk", None): _url_spec(f"{_ARCH}/AWSNeuron.svg"),
+    ("mxgraph.aws4.nova2", None): _url_spec(f"{_ARCH}/AmazonNova.svg"),
+    ("mxgraph.aws4.omics", None): _url_spec(f"{_ARCH}/AWSHealthOmics.svg"),
+    ("mxgraph.aws4.panorama", None): _url_spec(f"{_ARCH}/AWSPanorama.svg"),
+    ("mxgraph.aws4.personalize", None): _url_spec(f"{_ARCH}/AmazonPersonalize.svg"),
+    ("mxgraph.aws4.polly", None): _url_spec(f"{_ARCH}/AmazonPolly.svg"),
+    ("mxgraph.aws4.q", None): _url_spec(f"{_ARCH}/AmazonQ.svg"),
+    ("mxgraph.aws4.rekognition_2", None): _url_spec(f"{_ARCH}/AmazonRekognition.svg"),
+    ("mxgraph.aws4.sagemaker_2", None): _url_spec(f"{_ARCH}/AmazonSageMaker.svg"),
+    ("mxgraph.aws4.sagemaker", None): _url_spec(f"{_ARCH}/AmazonSageMakerAI.svg"),
+    ("mxgraph.aws4.amazon_sagemaker", None): _url_spec(f"{_ARCH}/AmazonSageMaker.svg"),
+    ("mxgraph.aws4.sagemaker_ground_truth", None): _url_spec(f"{_ARCH}/AmazonSageMakerGroundTruth.svg"),
+    ("mxgraph.aws4.sagemaker_studio_lab", None): _url_spec(f"{_ARCH}/AmazonSageMakerStudioLab.svg"),
+    ("mxgraph.aws4.tensorflow_on_aws", None): _url_spec(f"{_ARCH}/TensorFlowonAWS.svg"),
+    ("mxgraph.aws4.textract", None): _url_spec(f"{_ARCH}/AmazonTextract.svg"),
+    ("mxgraph.aws4.torchserve", None): _aws4_spec("torchserve", "#01A88D", "#FFFFFF", 70.0, 70.0),
+    ("mxgraph.aws4.transcribe", None): _url_spec(f"{_ARCH}/AmazonTranscribe.svg"),
+    ("mxgraph.aws4.translate", None): _url_spec(f"{_ARCH}/AmazonTranslate.svg"),
+    ("mxgraph.aws4.rekognition_image", None): _url_spec(f"{_RES}/AmazonRekognitionImage.svg"),
+    ("mxgraph.aws4.rekognition_video", None): _url_spec(f"{_RES}/AmazonRekognitionVideo.svg"),
+    ("mxgraph.aws4.devops_guru_insights", None): _url_spec(f"{_RES}/AmazonDevOpsGuruInsights.svg"),
+    ("mxgraph.aws4.sagemaker_canvas", None): _url_spec(f"{_RES}/AmazonSageMakerAICanvas.svg"),
+    ("mxgraph.aws4.sagemaker_geospatial_ml", None): _url_spec(f"{_RES}/AmazonSageMakerAIGeospatialML.svg"),
+    ("mxgraph.aws4.sagemaker_model", None): _url_spec(f"{_RES}/AmazonSageMakerAIModel.svg"),
+    ("mxgraph.aws4.sagemaker_notebook", None): _url_spec(f"{_RES}/AmazonSageMakerAINotebook.svg"),
+    ("mxgraph.aws4.sagemaker_shadow_testing", None): _url_spec(f"{_RES}/AmazonSageMakerAIShadowTesting.svg"),
+    ("mxgraph.aws4.sagemaker_train", None): _url_spec(f"{_RES}/AmazonSageMakerAITrain.svg"),
+    ("mxgraph.aws4.textract_analyze_lending", None): _url_spec(f"{_RES}/AmazonTextractAnalyzeLending.svg"),
 }
 
 
@@ -368,11 +477,29 @@ _AWS4_GROUP_SHAPE_TYPES = cast(Set[str], _AWS4_GROUP_CONFIG["shape_types"])
 _AWS4_GROUP_ICONS = cast(Dict[str, object], _AWS4_GROUP_CONFIG["icons"])
 
 
-def _image_data_from_ref(ref: str):
+def _spec_cover_scale(spec: tuple) -> Optional[float]:
+    if len(spec) < 3:
+        return None
+    meta = spec[-1] if isinstance(spec[-1], dict) else None
+    if not meta:
+        return None
+    value = meta.get("cover_scale")
+    if value is None:
+        return None
+    try:
+        scale = float(value)
+    except Exception:
+        return None
+    return scale if scale > 1.0 else None
+
+
+def _image_data_from_ref(ref: str, *, cover_scale: Optional[float] = None):
     """Build ImageData from URL/data URI."""
     from ..model.intermediate import ImageData
 
-    return ImageData(data_uri=ref) if ref.startswith("data:image/") else ImageData(file_path=ref)
+    if ref.startswith("data:image/"):
+        return ImageData(data_uri=ref, cover_scale=cover_scale)
+    return ImageData(file_path=ref, cover_scale=cover_scale)
 
 
 def resolve_aws_group_metadata(
@@ -421,8 +548,12 @@ def resolve_aws_group_metadata(
     padding_ratio = None
     padding_color_mode = None
     if icon_cfg:
-        _, ref = icon_cfg["spec"]
-        icon_data = _image_data_from_ref(ref)
+        ref = icon_cfg["spec"][1]
+        cover_scale = icon_cfg.get("cover_scale")
+        icon_data = _image_data_from_ref(
+            ref,
+            cover_scale=float(cover_scale) if cover_scale is not None else None,
+        )
         pr = icon_cfg.get("padding_ratio")
         padding_ratio = float(pr) if pr is not None else None
         padding_color_mode = str(icon_cfg.get("padding_color_mode", "stroke"))
@@ -548,11 +679,17 @@ def get_aws_icon_image_data(
         spec = _AWS4_ICON_SPEC_BY_DRAWIO_KEY.get(k)
         if not spec:
             continue
+        cover_scale = _spec_cover_scale(spec)
         if spec[0] == "aws4xml":
-            _, shape_name, bg_hex, fg_hex, canvas_w, canvas_h = spec
+            shape_name = spec[1]
+            bg_hex = spec[2]
+            fg_hex = spec[3]
+            canvas_w = spec[4]
+            canvas_h = spec[5]
             effective_bg_hex = bg_hex
             effective_bg_gradient_hex = None
             effective_gradient_direction = None
+            effective_fg_hex = fg_hex
             if is_resource_icon_shape:
                 style_fill = _get_style_value(style_str, "fillColor")
                 if style_fill and style_fill.lower() != "none":
@@ -561,22 +698,28 @@ def get_aws_icon_image_data(
                 if style_gradient and style_gradient.lower() != "none":
                     effective_bg_gradient_hex = style_gradient
                     effective_gradient_direction = _get_style_value(style_str, "gradientDirection")
+            # AWS / Illustration should follow draw.io fillColor for foreground tone.
+            if shape_name.startswith("illustration "):
+                style_fill = _get_style_value(style_str, "fillColor")
+                if style_fill and style_fill.lower() != "none":
+                    effective_fg_hex = style_fill
             data_uri = _build_shape_data_uri_from_aws4(
                 shape_name=shape_name,
                 background_hex=effective_bg_hex,
                 background_gradient_hex=effective_bg_gradient_hex,
                 gradient_direction=effective_gradient_direction,
-                foreground_hex=fg_hex,
+                foreground_hex=effective_fg_hex,
                 canvas_w=canvas_w,
                 canvas_h=canvas_h,
             )
             if data_uri:
-                return ImageData(data_uri=data_uri)
+                return ImageData(data_uri=data_uri, cover_scale=cover_scale)
             continue
-        _, ref = spec
-        return _image_data_from_ref(ref)
+        ref = spec[1]
+        return _image_data_from_ref(ref, cover_scale=cover_scale)
 
-    # 2) Dynamic fallback for AWS Illustrations (e.g. mxgraph.aws4.illustration_users).
+    # 2) Dynamic fallback for AWS / Illustration (e.g. mxgraph.aws4.illustration_users).
+    # Source sample: sample/AWS_Illustraion.drawio
     # These stencils are present in aws4.xml but not consistently available as static SVG files.
     shape_suffix = shape_type.split(".")[-1] if "." in shape_type else shape_type
     if shape_suffix.startswith("illustration_"):

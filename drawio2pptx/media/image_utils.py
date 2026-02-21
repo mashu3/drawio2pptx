@@ -699,6 +699,50 @@ def pad_image_to_square(
         return image_bytes
 
 
+def center_zoom_crop_image(
+    image_bytes: bytes,
+    cover_scale: Optional[float] = None,
+) -> bytes:
+    """
+    Zoom image around center and crop back to original size.
+
+    Args:
+        image_bytes: PNG/JPEG bytes
+        cover_scale: zoom factor (>1.0 enables center-crop zoom)
+    """
+    if cover_scale is None:
+        return image_bytes
+    try:
+        scale = float(cover_scale)
+    except Exception:
+        return image_bytes
+    if scale <= 1.0:
+        return image_bytes
+
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        w, h = img.width, img.height
+        if w <= 0 or h <= 0:
+            return image_bytes
+
+        zoom_w = max(int(round(w * scale)), w + 1)
+        zoom_h = max(int(round(h * scale)), h + 1)
+        zoomed = img.resize((zoom_w, zoom_h), resample=Image.Resampling.LANCZOS)
+        left = max(0, (zoom_w - w) // 2)
+        top = max(0, (zoom_h - h) // 2)
+        right = left + w
+        bottom = top + h
+        cropped = zoomed.crop((left, top, right, bottom))
+
+        out = io.BytesIO()
+        cropped.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+
 def get_image_size(image_bytes: bytes) -> Tuple[Optional[int], Optional[int]]:
     """
     Get raster image dimensions (width, height) in pixels.
@@ -721,6 +765,7 @@ def prepare_image_for_pptx(
     target_height_px: Optional[int] = None,
     base_dpi: float = 192.0,
     aws_icon_color_hex: Optional[str] = None,
+    cover_scale: Optional[float] = None,
 ) -> Tuple[Optional[bytes], Optional[int], Optional[int], bool]:
     """
     End-to-end image preparation for PPTX placement.
@@ -750,6 +795,7 @@ def prepare_image_for_pptx(
                 target_height_px,
                 base_dpi,
                 aws_icon_color_hex,
+                cover_scale,
                 getattr(default_config, "svg_backend", "cairosvg"),
             )
             cached_png = _read_cached_png(cache_key)
@@ -786,6 +832,8 @@ def prepare_image_for_pptx(
         shape_type_lower = shape_type.lower() if shape_type else ""
         if "resourceicon" not in shape_type_lower:
             image_bytes = trim_solid_background_padding(image_bytes)
+
+    image_bytes = center_zoom_crop_image(image_bytes, cover_scale=cover_scale)
 
     if cache_key and image_bytes:
         _write_cached_png(cache_key, image_bytes)

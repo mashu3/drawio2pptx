@@ -2309,6 +2309,7 @@ class PPTXWriter:
             target_height_px=target_height_px,
             base_dpi=self.config.dpi if hasattr(self.config, "dpi") else 192.0,
             aws_icon_color_hex=aws_icon_color_hex,
+            cover_scale=getattr(image_data, "cover_scale", None),
         )
 
         if not image_bytes:

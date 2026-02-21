@@ -115,6 +115,8 @@ class ImageData:
     file_path: Optional[str] = None  # External file path
     dpi: float = 96.0
     transparent: bool = False
+    # Optional center-crop zoom scale (e.g. 1.2 => zoom x1.2 and crop overflow).
+    cover_scale: Optional[float] = None
 
 
 @dataclass
