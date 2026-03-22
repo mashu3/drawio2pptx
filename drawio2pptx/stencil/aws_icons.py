@@ -1,11 +1,20 @@
 """
 AWS Architecture Icons stencil support.
 
-Resolves draw.io shapes like shape=mxgraph.aws4.lambda_function (without embedded
-image data) by mapping to external icon sources:
-- MKAbuMattar/aws-icons (npm, CDN) — official AWS Architecture Icons, updated (e.g. 07/31/2025).
-  See https://github.com/MKAbuMattar/aws-icons
-- weibeld/aws-icons-svg (raw GitHub) — fallback for specific icons.
+Primary asset: the draw.io key → icon spec map (``_AWS4_ICON_MAP``) — explicit
+mappings from ``shape=mxgraph.aws4.*`` / ``resourceIcon`` pairs to CDN SVG
+URLs or aws4.xml stencil names.
+
+Resolution order for a shape:
+1. Look up keys in ``_AWS4_ICON_MAP`` (see ``_drawio_lookup_keys``) — explicit
+   ``_url_spec`` / ``_aws4_spec`` entries and CDN URLs.
+2. If missing, try aws4.xml-only fallbacks (illustration_* not listed, then
+   generic unmapped aws4 shapes — avoid depending on this for known icons).
+
+Sources:
+- MKAbuMattar/aws-icons (npm, CDN) — official AWS Architecture Icons.
+- weibeld/aws-icons-svg — selected icons where CDN differs.
+- draw.io ``aws4.xml`` — stencil paths when no static SVG is mapped.
 """
 import re
 import base64
@@ -34,9 +43,40 @@ _AWS_ICON_SVG_BASE = (
     "https://raw.githubusercontent.com/weibeld/aws-icons-svg/main/"
     "q1-2022/Resource-Icons_01312022"
 )
+# Architecture service icons (weibeld) — a few Compute services are absent from npm aws-icons
+_AWS_ARCH_SERVICE_WEIBELD_48 = (
+    "https://raw.githubusercontent.com/weibeld/aws-icons-svg/main/"
+    "q1-2022/Architecture-Service-Icons_01312022/Arch_Compute/48"
+)
 _AWS4_STENCIL_XML_URL = (
     "https://raw.githubusercontent.com/jgraph/drawio/dev/src/main/webapp/stencils/aws4.xml"
 )
+
+# Process-local: avoid repeated HTTP fetches and full-xml regex work per icon.
+_AWS4_XML_TEXT_CACHE: Optional[str] = None
+_AWS4_SHAPE_SPEC_CACHE: Dict[str, Optional[tuple[str, float, float]]] = {}
+
+
+def _get_aws4_xml_text() -> Optional[str]:
+    """Load draw.io ``aws4.xml`` once per process; subsequent calls reuse memory."""
+    global _AWS4_XML_TEXT_CACHE
+    if _AWS4_XML_TEXT_CACHE is not None:
+        return _AWS4_XML_TEXT_CACHE
+    from ..media.image_utils import load_image_bytes
+
+    xml_bytes = load_image_bytes(file_path=_AWS4_STENCIL_XML_URL)
+    if not xml_bytes:
+        return None
+    _AWS4_XML_TEXT_CACHE = xml_bytes.decode("utf-8", errors="ignore")
+    return _AWS4_XML_TEXT_CACHE
+
+
+def _reset_aws4_stencil_cache() -> None:
+    """Clear in-process aws4.xml text and parsed shape specs (see ``clear_image_cache``)."""
+    global _AWS4_XML_TEXT_CACHE
+    _AWS4_XML_TEXT_CACHE = None
+    _AWS4_SHAPE_SPEC_CACHE.clear()
+
 
 def _url_spec(
     value: str,
@@ -102,32 +142,24 @@ def _group_icon_spec(
         entry["match_fill"] = match_fill
     return entry
 
-# Legacy alias mapping for known aws4 icon specs.
-# New primary lookup path uses draw.io internal keys:
-#   (shape=mxgraph.aws4.*) or
-#   (shape=mxgraph.aws4.resourceIcon, resIcon=mxgraph.aws4.*)
-# Value format:
-# - ("url", "<url-or-data-uri>"[, {"cover_scale": n}])
-# - ("aws4xml", "<shape_name>", "<bg_hex>", "<fg_hex>", canvas_w, canvas_h[, {"cover_scale": n}])
-# Draw.io-native AWS icon mapping.
-# Key format: (shape_type, res_icon)
-#   - direct shape: ("mxgraph.aws4.<shape>", None)
-#   - resourceIcon: ("mxgraph.aws4.resourceicon", "mxgraph.aws4.<resIcon>")
-# Value format: _url_spec(...) or _aws4_spec(...)
+# ---------------------------------------------------------------------------
+# Icon map (primary asset): draw.io key → resolution spec
+# ---------------------------------------------------------------------------
+# Keys use draw.io internals:
+#   - Direct: ( "mxgraph.aws4.<shape>", None )
+#   - resourceIcon: ( "mxgraph.aws4.resourceicon", "mxgraph.aws4.<resIcon>" )
 #
-# Grouping guide (draw.io palette names)
-# - AWS / General Resources
-# - AWS / Application Integration
-# - AWS / AR & VR
-# - AWS / Analytics
-# - AWS / Artificial Intelligence
+# Values from helpers:
+#   - _url_spec(url)     → ("url", url[, {"cover_scale": f}])
+#   - _aws4_spec(...)    → ("aws4xml", shape_name, bg, fg, w, h[, meta])
 #
-_AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
+# Palette sections below mirror draw.io AWS libraries (for maintenance).
+# Group/container overlays are separate: ``_AWS4_GROUP_ICONS``.
+# ---------------------------------------------------------------------------
+_AWS4_ICON_MAP: Dict[tuple[str, Optional[str]], tuple] = {
     # -------------------------------------------------------------------------
     # AWS / Core services / legacy aliases (cross-category bootstrap mappings)
     # -------------------------------------------------------------------------
-    ("mxgraph.aws4.lambda", None): _url_spec(f"{_ARCH}/AWSLambda.svg"),
-    ("mxgraph.aws4.lambda_function", None): _url_spec(f"{_RES}/AWSLambdaLambdaFunction.svg"),
     ("mxgraph.aws4.cloudwatch", None): _url_spec(f"{_ARCH}/AmazonCloudWatch.svg"),
     ("mxgraph.aws4.amazon_cloudwatch", None): _url_spec(f"{_ARCH}/AmazonCloudWatch.svg"),
     ("mxgraph.aws4.sns", None): _url_spec(f"{_ARCH}/AmazonSimpleNotificationService.svg"),
@@ -471,6 +503,141 @@ _AWS4_ICON_SPEC_BY_DRAWIO_KEY: Dict[tuple[str, Optional[str]], tuple] = {
     ("mxgraph.aws4.aws_billing_conductor", None): _url_spec(f"{_ARCH}/AWSBillingConductor.svg"),
     ("mxgraph.aws4.reserved_instance_reporting", None): _url_spec(f"{_ARCH}/ReservedInstanceReporting.svg"),
     ("mxgraph.aws4.savings_plans", None): _url_spec(f"{_ARCH}/SavingsPlans.svg"),
+    # -------------------------------------------------------------------------
+    # AWS / Compute
+    # -------------------------------------------------------------------------
+    ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.compute'): _url_spec(f"{_CATEGORY}/Compute.svg", cover_scale=1.3),
+    ("mxgraph.aws4.compute", None): _url_spec(f"{_CATEGORY}/Compute.svg", cover_scale=1.3),
+    ("mxgraph.aws4.ec2", None): _url_spec(f"{_ARCH}/AmazonEC2.svg"),
+    # aws4.xml "auto scaling2" — CDN AmazonEC2AutoScaling.svg fills the arrow/orange opposite to draw.io.
+    ("mxgraph.aws4.auto_scaling2", None): _aws4_spec("auto scaling2", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.auto_scaling3", None): _url_spec(f"{_ARCH}/AWSApplicationAutoScaling.svg"),
+    ("mxgraph.aws4.bottlerocket", None): _url_spec(f"{_ARCH}/Bottlerocket.svg"),
+    ("mxgraph.aws4.lightsail", None): _url_spec(f"{_ARCH}/AmazonLightsail.svg"),
+    ("mxgraph.aws4.lightsail_for_research", None): _url_spec(f"{_ARCH}/AmazonLightsailforResearch.svg"),
+    ("mxgraph.aws4.app_runner", None): _url_spec(f"{_ARCH}/AWSAppRunner.svg"),
+    ("mxgraph.aws4.batch", None): _url_spec(f"{_ARCH}/AWSBatch.svg"),
+    ("mxgraph.aws4.compute_optimizer", None): _url_spec(f"{_ARCH}/AWSComputeOptimizer.svg"),
+    ("mxgraph.aws4.elastic_beanstalk", None): _url_spec(f"{_ARCH}/AWSElasticBeanstalk.svg"),
+    ("mxgraph.aws4.elastic_fabric_adapter", None): _url_spec(f"{_ARCH}/ElasticFabricAdapter.svg"),
+    ("mxgraph.aws4.fargate", None): _url_spec(f"{_ARCH}/AWSFargate.svg"),
+    ("mxgraph.aws4.ec2_image_builder", None): _url_spec(f"{_ARCH}/AmazonEC2ImageBuilder.svg"),
+    ("mxgraph.aws4.elastic_vmware_service", None): _url_spec(f"{_ARCH}/AmazonElasticVMwareService.svg"),
+    ("mxgraph.aws4.genomics_cli", None): _url_spec(f"{_AWS_ARCH_SERVICE_WEIBELD_48}/Arch_Amazon-Genomics-CLI_48.svg"),
+    ("mxgraph.aws4.resourceicon", 'mxgraph.aws4.lambda'): _url_spec(f"{_ARCH}/AWSLambda.svg"),
+    ("mxgraph.aws4.lambda", None): _url_spec(f"{_ARCH}/AWSLambda.svg"),
+    ("mxgraph.aws4.lambda_function", None): _url_spec(f"{_RES}/AWSLambdaLambdaFunction.svg"),
+    ("mxgraph.aws4.local_zones", None): _url_spec(f"{_ARCH}/AWSLocalZones.svg"),
+    ("mxgraph.aws4.nice_dcv", None): _url_spec(f"{_ARCH}/AmazonDCV.svg"),
+    ("mxgraph.aws4.nice_enginframe", None): _url_spec(f"{_AWS_ARCH_SERVICE_WEIBELD_48}/Arch_NICE-EnginFrame_48.svg"),
+    ("mxgraph.aws4.nitro_enclaves", None): _url_spec(f"{_ARCH}/AWSNitroEnclaves.svg"),
+    ("mxgraph.aws4.outposts_family", None): _url_spec(f"{_ARCH}/AWSOutpostsfamily.svg"),
+    ("mxgraph.aws4.outposts", None): _url_spec(f"{_ARCH}/AWSOutpostsrack.svg"),
+    ("mxgraph.aws4.outposts_1u_and_2u_servers", None): _url_spec(f"{_ARCH}/AWSOutpostsservers.svg"),
+    ("mxgraph.aws4.parallel_cluster", None): _url_spec(f"{_ARCH}/AWSParallelCluster.svg"),
+    ("mxgraph.aws4.parallel_computing_service", None): _url_spec(f"{_ARCH}/AWSParallelComputingService.svg"),
+    ("mxgraph.aws4.serverless_application_repository", None): _url_spec(f"{_ARCH}/AWSServerlessApplicationRepository.svg"),
+    ("mxgraph.aws4.simspace_weaver", None): _url_spec(f"{_ARCH}/AWSSimSpaceWeaver.svg"),
+    ("mxgraph.aws4.elastic_load_balancing", None): _url_spec(f"{_ARCH}/ElasticLoadBalancing.svg"),
+    ("mxgraph.aws4.vmware_cloud_on_aws", None): _url_spec(f"{_AWS_ARCH_SERVICE_WEIBELD_48}/Arch_VMware-Cloud-on-AWS_48.svg"),
+    ("mxgraph.aws4.wavelength", None): _url_spec(f"{_ARCH}/AWSWavelength.svg"),
+    # EC2 instance family & related tiles (aws4.xml shape names). sample/aws_compute.drawio
+    ("mxgraph.aws4.a1_instance", None): _aws4_spec("a1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ami", None): _aws4_spec("ami", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.application", None): _aws4_spec("application", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c4_instance", None): _aws4_spec("c4 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c5_instance", None): _aws4_spec("c5 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c5a", None): _aws4_spec("c5a", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c5ad", None): _aws4_spec("c5ad", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c5d", None): _aws4_spec("c5d", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c5n_instance", None): _aws4_spec("c5n instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c6g_instance", None): _aws4_spec("c6g instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.c6gd", None): _aws4_spec("c6gd", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.d2_instance", None): _aws4_spec("d2 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.d3_instance", None): _aws4_spec("d3 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.d3en_instance", None): _aws4_spec("d3en instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.db_on_instance2", None): _aws4_spec("db on instance2", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.deployment", None): _aws4_spec("deployment", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_aws_microservice_extractor_for_net", None): _aws4_spec(
+        "ec2 aws microservice extractor for net", "#FFFFFF", "#ED7100", 64.0, 64.0
+    ),
+    ("mxgraph.aws4.ec2_c6a_instance", None): _aws4_spec("ec2 c6a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_c6gn_instance", None): _aws4_spec("ec2 c6gn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_c6i_instance", None): _aws4_spec("ec2 c6i instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_c6in_instance", None): _aws4_spec("ec2 c6in instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_c7g_instance", None): _aws4_spec("ec2 c7g instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_c7gn_instance", None): _aws4_spec("ec2 c7gn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_dl1_instance", None): _aws4_spec("ec2 dl1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_g5_instance", None): _aws4_spec("ec2 g5 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_g5g_instance", None): _aws4_spec("ec2 g5g instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_hpc6a_instance", None): _aws4_spec("ec2 hpc6a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_hpc6id_instance", None): _aws4_spec("ec2 hpc6id instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_i4i_instance", None): _aws4_spec("ec2 i4i instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_im4gn_instance", None): _aws4_spec("ec2 im4gn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_inf2_instance", None): _aws4_spec("ec2 inf2 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_is4gen_instance", None): _aws4_spec("ec2 is4gen instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_m1_mac_instance", None): _aws4_spec("ec2 m1 mac instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_m6i_instance", None): _aws4_spec("ec2 m6i instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_m6idn_instance", None): _aws4_spec("ec2 m6idn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_m6in_instance", None): _aws4_spec("ec2 m6in instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_p4de_instance", None): _aws4_spec("ec2 p4de instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_r6a_instance", None): _aws4_spec("ec2 r6a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_r6i_instance", None): _aws4_spec("ec2 r6i instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_r6idn_instance", None): _aws4_spec("ec2 r6idn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_r6in_instance", None): _aws4_spec("ec2 r6in instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_r7iz_instance", None): _aws4_spec("ec2 r7iz instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_trn1_instance", None): _aws4_spec("ec2 trn1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_vt1_instance", None): _aws4_spec("ec2 vt1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_x2gd_instance", None): _aws4_spec("ec2 x2gd instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_x2idn_instance", None): _aws4_spec("ec2 x2idn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_x2iedn_instance", None): _aws4_spec("ec2 x2iedn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.ec2_x2iezn_instance", None): _aws4_spec("ec2 x2iezn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.elastic_ip_address", None): _aws4_spec("elastic ip address", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.f1_instance", None): _aws4_spec("f1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.g3_instance", None): _aws4_spec("g3 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.g4ad_instance", None): _aws4_spec("g4ad instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.h1_instance", None): _aws4_spec("h1 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.habana_gaudi", None): _aws4_spec("habana gaudi", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.high_memory_instance", None): _aws4_spec("high memory instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.i2", None): _aws4_spec("i2", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.i3_instance", None): _aws4_spec("i3 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.i3en", None): _aws4_spec("i3en", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.inf1", None): _aws4_spec("inf1", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.inferentia", None): _aws4_spec("inferentia", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.instance2", None): _aws4_spec("instance2", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.instance_with_cloudwatch2", None): _aws4_spec(
+        "instance with cloudwatch2", "#FFFFFF", "#ED7100", 64.0, 64.0
+    ),
+    ("mxgraph.aws4.instances", None): _aws4_spec("instances", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.m4_instance", None): _aws4_spec("m4 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.m5a_instance", None): _aws4_spec("m5a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.m5d_instance", None): _aws4_spec("m5d instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.mac_instance", None): _aws4_spec("mac instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.optimized_instance", None): _aws4_spec("optimized instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.p2_instance", None): _aws4_spec("p2 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.p3_instance", None): _aws4_spec("p3 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.p3dn_instance", None): _aws4_spec("p3dn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.p4_instance", None): _aws4_spec("p4 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r4_instance", None): _aws4_spec("r4 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5_instance", None): _aws4_spec("r5 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5a_instance", None): _aws4_spec("r5a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5ad_instance", None): _aws4_spec("r5ad instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5b_instance", None): _aws4_spec("r5b instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5d_instance", None): _aws4_spec("r5d instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5gd_instance", None): _aws4_spec("r5gd instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r5n_instance", None): _aws4_spec("r5n instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.r6g_instance", None): _aws4_spec("r6g instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.rdn_instance", None): _aws4_spec("rdn instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.rescue", None): _aws4_spec("rescue", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.spot_instance", None): _aws4_spec("spot instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.t2_instance", None): _aws4_spec("t2 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.t3_instance", None): _aws4_spec("t3 instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.t3a_instance", None): _aws4_spec("t3a instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.t4g_instance", None): _aws4_spec("t4g instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.trainium_instance", None): _aws4_spec("trainium instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.x1_instance2", None): _aws4_spec("x1 instance2", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.x1e_instance", None): _aws4_spec("x1e instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
+    ("mxgraph.aws4.z1d_instance", None): _aws4_spec("z1d instance", "#FFFFFF", "#ED7100", 64.0, 64.0),
 }
 
 
@@ -480,6 +647,7 @@ def _normalize_drawio_aws_value(value: Optional[str]) -> Optional[str]:
     norm = value.strip().lower()
     return norm or None
 
+# Group shapes use a small overlay table (grIcon), not the main icon map.
 _AWS4_GROUP_CONFIG: Dict[str, object] = {
     "shape_types": {"mxgraph.aws4.group", "mxgraph.aws4.groupcenter"},
     "icons": {
@@ -544,6 +712,59 @@ def _spec_cover_scale(spec: tuple) -> Optional[float]:
     except Exception:
         return None
     return scale if scale > 1.0 else None
+
+
+def _image_data_from_aws4xml_spec(
+    spec: tuple,
+    style_str: Optional[str],
+    *,
+    is_resource_icon_shape: bool,
+):
+    """
+    Turn an _aws4_spec(...) tuple into ImageData: style overrides, then rasterize via aws4.xml.
+    Used for dict entries and for dynamic fallbacks that synthesize the same tuple shape.
+    """
+    from ..model.intermediate import ImageData
+
+    if not spec or spec[0] != "aws4xml":
+        return None
+    cover_scale = _spec_cover_scale(spec)
+    shape_name = spec[1]
+    bg_hex = spec[2]
+    fg_hex = spec[3]
+    canvas_w = spec[4]
+    canvas_h = spec[5]
+    effective_bg_hex = bg_hex
+    effective_bg_gradient_hex = None
+    effective_gradient_direction = None
+    effective_fg_hex = fg_hex
+    if is_resource_icon_shape:
+        style_fill = _get_style_value(style_str, "fillColor")
+        if style_fill and style_fill.lower() != "none":
+            effective_bg_hex = style_fill
+        style_gradient = _get_style_value(style_str, "gradientColor")
+        if style_gradient and style_gradient.lower() != "none":
+            effective_bg_gradient_hex = style_gradient
+            effective_gradient_direction = _get_style_value(style_str, "gradientDirection")
+        # resourceIcon tiles: colored background + white glyph (non-illustration).
+        if not shape_name.startswith("illustration "):
+            effective_fg_hex = "#FFFFFF"
+    if shape_name.startswith("illustration "):
+        style_fill = _get_style_value(style_str, "fillColor")
+        if style_fill and style_fill.lower() != "none":
+            effective_fg_hex = style_fill
+    data_uri = _build_shape_data_uri_from_aws4(
+        shape_name=shape_name,
+        background_hex=effective_bg_hex,
+        background_gradient_hex=effective_bg_gradient_hex,
+        gradient_direction=effective_gradient_direction,
+        foreground_hex=effective_fg_hex,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+    )
+    if not data_uri:
+        return None
+    return ImageData(data_uri=data_uri, cover_scale=cover_scale)
 
 
 def _image_data_from_ref(ref: str, *, cover_scale: Optional[float] = None):
@@ -702,6 +923,9 @@ def get_aws_icon_image_data(
     """
     Resolve an AWS stencil shape to ImageData (file_path URL from icon sources).
 
+    Prefer a hit in ``_AWS4_ICON_MAP``; otherwise use aws4.xml fallbacks documented
+    in the module docstring.
+
     Args:
         shape_type: Normalized shape type (e.g. mxgraph.aws4.lambda_function).
         style_str: Raw style string (to read resIcon for resourceIcon shapes).
@@ -710,14 +934,11 @@ def get_aws_icon_image_data(
     Returns:
         ImageData with file_path set if the icon is found, else None.
     """
-    from ..model.intermediate import ImageData
-
     if not is_aws_shape_type(shape_type):
         return None
 
     shape_type_lower = shape_type.lower()
-    # aws4 group/groupCenter should be rendered as container + small overlay icon.
-    # Do not resolve them as full-size shape images here.
+    # aws4 group/groupCenter: container + small overlay via resolve_aws_group_metadata.
     if shape_type_lower in _AWS4_GROUP_SHAPE_TYPES:
         return None
 
@@ -727,66 +948,63 @@ def get_aws_icon_image_data(
     if not drawio_keys:
         return None
 
-    # 0) Draw.io-native dictionary lookup (shape or shape+resIcon).
+    # 1) Explicit map: URL icons or aws4.xml specs.
     for k in drawio_keys:
-        spec = _AWS4_ICON_SPEC_BY_DRAWIO_KEY.get(k)
+        spec = _AWS4_ICON_MAP.get(k)
         if not spec:
             continue
-        cover_scale = _spec_cover_scale(spec)
         if spec[0] == "aws4xml":
-            shape_name = spec[1]
-            bg_hex = spec[2]
-            fg_hex = spec[3]
-            canvas_w = spec[4]
-            canvas_h = spec[5]
-            effective_bg_hex = bg_hex
-            effective_bg_gradient_hex = None
-            effective_gradient_direction = None
-            effective_fg_hex = fg_hex
-            if is_resource_icon_shape:
-                style_fill = _get_style_value(style_str, "fillColor")
-                if style_fill and style_fill.lower() != "none":
-                    effective_bg_hex = style_fill
-                style_gradient = _get_style_value(style_str, "gradientColor")
-                if style_gradient and style_gradient.lower() != "none":
-                    effective_bg_gradient_hex = style_gradient
-                    effective_gradient_direction = _get_style_value(style_str, "gradientDirection")
-            # AWS / Illustration should follow draw.io fillColor for foreground tone.
-            if shape_name.startswith("illustration "):
-                style_fill = _get_style_value(style_str, "fillColor")
-                if style_fill and style_fill.lower() != "none":
-                    effective_fg_hex = style_fill
-            data_uri = _build_shape_data_uri_from_aws4(
-                shape_name=shape_name,
-                background_hex=effective_bg_hex,
-                background_gradient_hex=effective_bg_gradient_hex,
-                gradient_direction=effective_gradient_direction,
-                foreground_hex=effective_fg_hex,
-                canvas_w=canvas_w,
-                canvas_h=canvas_h,
+            img = _image_data_from_aws4xml_spec(
+                spec, style_str, is_resource_icon_shape=is_resource_icon_shape
             )
-            if data_uri:
-                return ImageData(data_uri=data_uri, cover_scale=cover_scale)
+            if img:
+                return img
             continue
         ref = spec[1]
-        return _image_data_from_ref(ref, cover_scale=cover_scale)
+        return _image_data_from_ref(ref, cover_scale=_spec_cover_scale(spec))
 
-    # 2) Dynamic fallback for AWS / Illustration (e.g. mxgraph.aws4.illustration_users).
-    # Source sample: sample/AWS_Illustraion.drawio
-    # These stencils are present in aws4.xml but not consistently available as static SVG files.
+    # 2) Illustration shapes not listed in the map (aws4.xml only).
     shape_suffix = shape_type.split(".")[-1] if "." in shape_type else shape_type
     if shape_suffix.startswith("illustration_"):
         shape_name = shape_suffix.replace("_", " ")
-        fg = _get_style_value(style_str, "fillColor") or "#879196"
-        data_uri = _build_shape_data_uri_from_aws4(
-            shape_name=shape_name,
-            background_hex="none",
-            foreground_hex=fg,
-            canvas_w=100.0,
-            canvas_h=100.0,
+        illu_spec = _aws4_spec(
+            shape_name, "none", "#879196", 100.0, 100.0
         )
-        if data_uri:
-            return ImageData(data_uri=data_uri)
+        img = _image_data_from_aws4xml_spec(
+            illu_spec, style_str, is_resource_icon_shape=is_resource_icon_shape
+        )
+        if img:
+            return img
+
+    # 3) Last resort: mxgraph.aws4.* not in ``_AWS4_ICON_MAP`` (new draw.io shapes). Prefer adding
+    #    explicit ``_aws4_spec`` entries under AWS / Compute instead of relying on this.
+    candidate_shape_names: List[str] = []
+    for shape_key, res_key in drawio_keys:
+        raw = res_key or shape_key
+        suffix = raw.split(".")[-1] if "." in raw else raw
+        if not suffix or suffix in {"resourceicon", "group", "groupcenter"}:
+            continue
+        candidate_shape_names.append(suffix.replace("_", " "))
+
+    seen_shape_names: Set[str] = set()
+    style_fill = _get_style_value(style_str, "fillColor")
+    for shape_name in candidate_shape_names:
+        if shape_name in seen_shape_names:
+            continue
+        seen_shape_names.add(shape_name)
+
+        bg = "none"
+        fg = style_fill or "#232F3D"
+        if is_resource_icon_shape:
+            bg = style_fill or "#232F3D"
+            fg = "#FFFFFF"
+
+        dyn_spec = _aws4_spec(shape_name, bg, fg, 64.0, 64.0)
+        img = _image_data_from_aws4xml_spec(
+            dyn_spec, style_str, is_resource_icon_shape=is_resource_icon_shape
+        )
+        if img:
+            return img
 
     return None
 
@@ -803,6 +1021,9 @@ def _build_shape_data_uri_from_aws4(
 ) -> Optional[str]:
     """
     Build a data URI by fetching an aws4.xml shape and drawing it on a canvas.
+
+    Small or very flat stencils are scaled up (uniform, centered) to fill ~92% of
+    the canvas so SVG→PNG retains more detail on slide placement.
     """
     spec = _fetch_shape_spec_from_aws4(shape_name)
     if not spec:
@@ -813,8 +1034,22 @@ def _build_shape_data_uri_from_aws4(
     effective_canvas_w = max(canvas_w, shape_w)
     effective_canvas_h = max(canvas_h, shape_h)
 
-    offset_x = (effective_canvas_w - shape_w) / 2.0
-    offset_y = (effective_canvas_h - shape_h) / 2.0
+    # Uniform scale so the stencil uses most of the canvas (draw.io nominal w/h).
+    # Wide/short shapes (e.g. elastic ip address) would otherwise leave most pixels as
+    # background and look soft after SVG→PNG and slide scaling.
+    margin = 0.92
+    if shape_w > 0 and shape_h > 0:
+        sx = (effective_canvas_w * margin) / shape_w
+        sy = (effective_canvas_h * margin) / shape_h
+        scale_fit = min(sx, sy)
+        scale = 1.0 if scale_fit < 1.0 else scale_fit
+    else:
+        scale = 1.0
+    path_transform = (
+        f"translate({effective_canvas_w / 2.0:.3f} {effective_canvas_h / 2.0:.3f}) "
+        f"scale({scale:.6f}) "
+        f"translate({-shape_w / 2.0:.3f} {-shape_h / 2.0:.3f})"
+    )
 
     bg_fill = background_hex
     defs = ""
@@ -838,7 +1073,7 @@ def _build_shape_data_uri_from_aws4(
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {effective_canvas_w:.3f} {effective_canvas_h:.3f}">'
         f"{defs}"
         f'<rect x="0" y="0" width="{effective_canvas_w:.3f}" height="{effective_canvas_h:.3f}" fill="{bg_fill}"/>'
-        f'<path d="{path_d}" transform="translate({offset_x:.3f} {offset_y:.3f})" fill="{foreground_hex}" fill-rule="evenodd"/>'
+        f'<path d="{path_d}" transform="{path_transform}" fill="{foreground_hex}" fill-rule="evenodd"/>'
         "</svg>"
     )
     encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
@@ -865,13 +1100,16 @@ def _svg_gradient_vector_for_drawio_direction(direction: Optional[str]) -> tuple
 def _fetch_shape_spec_from_aws4(shape_name: str) -> Optional[tuple[str, float, float]]:
     """
     Fetch and parse shape path data from draw.io official aws4.xml.
-    """
-    from ..media.image_utils import load_image_bytes
 
-    xml_bytes = load_image_bytes(file_path=_AWS4_STENCIL_XML_URL)
-    if not xml_bytes:
+    Caches the XML document in memory after the first successful fetch and
+    caches each shape's parsed path tuple so repeated icons do not re-scan XML.
+    """
+    if shape_name in _AWS4_SHAPE_SPEC_CACHE:
+        return _AWS4_SHAPE_SPEC_CACHE[shape_name]
+
+    xml_text = _get_aws4_xml_text()
+    if not xml_text:
         return None
-    xml_text = xml_bytes.decode("utf-8", errors="ignore")
 
     shape_match = re.search(
         rf'(<shape[^>]*name="{re.escape(shape_name)}"[^>]*>)(.*?)</shape>',
@@ -879,6 +1117,7 @@ def _fetch_shape_spec_from_aws4(shape_name: str) -> Optional[tuple[str, float, f
         re.IGNORECASE | re.DOTALL,
     )
     if not shape_match:
+        _AWS4_SHAPE_SPEC_CACHE[shape_name] = None
         return None
 
     shape_tag = shape_match.group(1)
@@ -886,17 +1125,20 @@ def _fetch_shape_spec_from_aws4(shape_name: str) -> Optional[tuple[str, float, f
     w_match = re.search(r'\bw="([^"]+)"', shape_tag)
     h_match = re.search(r'\bh="([^"]+)"', shape_tag)
     if not w_match or not h_match:
+        _AWS4_SHAPE_SPEC_CACHE[shape_name] = None
         return None
     try:
         shape_w = float(w_match.group(1))
         shape_h = float(h_match.group(1))
     except ValueError:
+        _AWS4_SHAPE_SPEC_CACHE[shape_name] = None
         return None
 
     path_match = re.search(
         r"<path>(.*?)</path>", shape_body, re.IGNORECASE | re.DOTALL
     )
     if not path_match:
+        _AWS4_SHAPE_SPEC_CACHE[shape_name] = None
         return None
 
     commands: List[str] = []
@@ -942,5 +1184,8 @@ def _fetch_shape_spec_from_aws4(shape_name: str) -> Optional[tuple[str, float, f
             commands.append("Z")
 
     if not commands:
+        _AWS4_SHAPE_SPEC_CACHE[shape_name] = None
         return None
-    return " ".join(commands), shape_w, shape_h
+    result: tuple[str, float, float] = (" ".join(commands), shape_w, shape_h)
+    _AWS4_SHAPE_SPEC_CACHE[shape_name] = result
+    return result

@@ -423,8 +423,15 @@ def _write_cached_png(cache_key: str, png_bytes: bytes) -> None:
 
 def clear_image_cache(cache_dir: Optional[str] = None) -> None:
     """
-    Clear local image cache directory.
+    Clear local PNG cache directory and in-process aws4.xml stencil caches.
     """
+    try:
+        from ..stencil.aws_icons import _reset_aws4_stencil_cache
+
+        _reset_aws4_stencil_cache()
+    except ImportError:
+        pass
+
     path = Path(cache_dir).expanduser() if cache_dir else _image_cache_dir()
     try:
         if path.exists():
